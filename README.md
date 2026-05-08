@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="graphics/S.png" alt="Snekbooru Logo" width="256">
+  <img src="git_graphics/S.png" alt="Snekbooru Logo" width="256">
 </p>
 
 # IMPORTANT NOTICE
@@ -13,6 +13,27 @@ that you go to https://snekbooru.org/ for more information regarding this projec
   - **THIS PROJECT IS CLOSED SOURCE, FOR MORE INFORMATION AND INQUIERIES PLEASE CONTACT THE CREATOR AND DEVELOPER atroubledsnake**
   - **PROJECT VERSIONS 6.0.0 AND BELOW MAY CAUSE WINDOWS DEFENDER OR YOUR ANTIVIRUS TO BLOCK OUR APP DURING INSTALL OR RUNNING, THIS IS BECAUSE OF THE FACT WE DO NOT POSSES A CODE SIGNING LISCENCE AND OBFUSCATION TECHNIQUES USED TO KEEP THE SOURCE CODE SECURE**
   - **NOTE: IF YOU POSSES A VERSION FROM PRE 6.0.0 IF YOU INSTALL THE NEWEST VERSION YOU WILL HAVE TO MANUALLY REMOVE THE OLD INSTALLATION IN C:\Program Files (x86)\Snekbooru, SINCE THE NEW INSTALLER INSTALLS TO C:\Program Files\Snekbooru AND YOU WILL END UP WITH TWO INSTALLATIONS IF YOU DON'T, SORRY FOR THE INCONVENIENCE**
+
+## Showcase
+
+<p align="center">
+  <img src="git_graphics/homepage.png" alt="Home Page" width="800">
+  <br><i>Home Page</i><br><br>
+  <img src="git_graphics/browserpage.png" alt="Browser" width="800">
+  <br><i>Browser</i><br><br>
+  <img src="git_graphics/hentaipage.png" alt="Hentai Tab" width="800">
+  <br><i>Hentai Tab</i><br><br>
+  <img src="git_graphics/mangapage.png" alt="Manga Reader" width="800">
+  <br><i>Manga Reader</i><br><br>
+  <img src="git_graphics/aipage.png" alt="AI Assistant" width="800">
+  <br><i>AI Assistant</i><br><br>
+  <img src="git_graphics/favoritespage.png" alt="Favorites" width="800">
+  <br><i>Favorites</i><br><br>
+  <img src="git_graphics/downloadspage.png" alt="Downloads" width="800">
+  <br><i>Downloads</i><br><br>
+  <img src="git_graphics/minigamespage.png" alt="Minigames" width="800">
+  <br><i>Minigames</i><br><br>
+</p>
 
 ## Features
 
