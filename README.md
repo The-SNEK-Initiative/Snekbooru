@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="graphics/S.png" alt="Snekbooru Logo" width="256">
+</p>
+
 # IMPORTANT NOTICE
 ### This README is still maintained, however it is recommended
 that you go to https://snekbooru.org/ for more information regarding this project. (Usually a few hours behind on updates however)
