@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="git_graphics/S.png" alt="Snekbooru Logo" width="256">
+  <img src="graphics/logo.png" alt="Snekbooru Logo" width="256">
 </p>
 
 # IMPORTANT NOTICE
