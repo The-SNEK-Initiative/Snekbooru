@@ -1,0 +1,13 @@
+PyQt5
+PyQtWebEngine
+requests
+cloudscraper
+qtawesome
+python-vlc
+Markdown
+enma
+cryptography
+aiohttp
+aiocache
+google-generativeai
+Pillow

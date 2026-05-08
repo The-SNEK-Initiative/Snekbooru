@@ -1,0 +1,11 @@
+# The SNEK Inititatives Snekbooru repository .gitignore file.
+
+/tests/*
+/venv/*
+*/__pycache__/*
+/snek_apollo_python_sdk/*
+/snekbooru/scratch/*
+
+*.pyc
+*spec
+cloc-1.64.exe
