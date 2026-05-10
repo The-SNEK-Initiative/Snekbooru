@@ -70,7 +70,7 @@ that you go to https://snekbooru.org/ for more information regarding this projec
 
 ## Download
 Windows precompilation only for now
-- Link: [WIN_Snekbooru_Installer_x64](https://github.com/The-SNEK-Initiative/Snekbooru/releases/download/v6.0.0/WIN_Snekbooru_Installer_x64.exe)
+- Link: [WIN_Snekbooru_Installer_x64](https://github.com/The-SNEK-Initiative/Snekbooru/releases/download/v6.0.1/WIN_Snekbooru_Installer_x64.exe)
 
 ## Installation
 
