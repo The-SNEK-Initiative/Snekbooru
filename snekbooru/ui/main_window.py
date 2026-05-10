@@ -170,7 +170,6 @@ def _extract_title_from_value(value):
     return None
 
 def extract_cover_url(manga_obj):
-    """Refactored and robust cover URL extractor."""
     if not manga_obj:
         return None
         
@@ -183,23 +182,19 @@ def extract_cover_url(manga_obj):
         if url.startswith("http"): return url
         return _mangadex_og_image_from_url(url)
 
-    # 1. Try direct keys
     if isinstance(manga_obj, dict):
         for k in keys:
             val = manga_obj.get(k)
             if not val: continue
             
-            # Direct string
             res = _validate_url(val)
             if res: return res
             
-            # Dictionary sub-keys
             if isinstance(val, dict):
                 for sk in sub_keys:
                     res = _validate_url(val.get(sk))
                     if res: return res
             
-            # Attribute access (if val is an object)
             for sk in sub_keys:
                 if hasattr(val, sk):
                     try:
@@ -207,18 +202,15 @@ def extract_cover_url(manga_obj):
                         if res: return res
                     except Exception: pass
     
-    # 2. Try attribute access on main object
     for k in keys:
         if hasattr(manga_obj, k):
             try:
                 val = getattr(manga_obj, k)
                 if not val: continue
                 
-                # Direct string
                 res = _validate_url(val)
                 if res: return res
                 
-                # List support
                 if isinstance(val, (list, tuple)) and val:
                     first = val[0]
                     res = _validate_url(first)
@@ -228,7 +220,6 @@ def extract_cover_url(manga_obj):
                             res = _validate_url(getattr(first, sk))
                             if res: return res
                 
-                # Nested sub-keys/attrs
                 for sk in sub_keys:
                     if hasattr(val, sk):
                         res = _validate_url(getattr(val, sk))
@@ -238,19 +229,16 @@ def extract_cover_url(manga_obj):
     return None
 
 def extract_title(manga_obj):
-    """Refactored title extractor with proper priority and recursion."""
     if not manga_obj:
         return "<no title>"
         
     keys = ("title", "name", "pretty", "english", "en", "japanese", "jp", "other")
     
-    # 1. Try dict keys
     if isinstance(manga_obj, dict):
         for k in keys:
             title = _extract_title_from_value(manga_obj.get(k))
             if title: return title
             
-    # 2. Try attribute access
     for k in keys:
         if hasattr(manga_obj, k):
             try:
@@ -258,13 +246,11 @@ def extract_title(manga_obj):
                 if title: return title
             except Exception: pass
             
-    # 3. Fallback to URL-like strings
     for attr in ("url", "uri", "link", "page", "source_url"):
         val = manga_obj.get(attr) if isinstance(manga_obj, dict) else getattr(manga_obj, attr, None)
         if isinstance(val, str) and val.strip():
             return val.strip()
             
-    # 4. Fallback to ID
     for attr in ("id", "identifier", "uuid", "manga_id"):
         val = manga_obj.get(attr) if isinstance(manga_obj, dict) else getattr(manga_obj, attr, None)
         if val is not None:
@@ -274,7 +260,6 @@ def extract_title(manga_obj):
 
 
 def number_to_png_display(number):
-    """Convert a number to HTML with PNG digit images that scale with window size."""
     try:
         number_str = str(number).replace(',', '')
         html_parts = []
@@ -282,17 +267,13 @@ def number_to_png_display(number):
             if digit.isdigit():
                 digit_path = get_resource_path(os.path.join("graphics", f"{digit}.png"))
                 if os.path.exists(digit_path):
-                    # Load and scale the image
                     pixmap = QPixmap(digit_path)
                     if not pixmap.isNull():
-                        # Scale to a responsive height based on viewport
-                        # Using ~2.5% of viewport height for scaling
                         screen = QApplication.primaryScreen()
                         viewport_height = screen.geometry().height()
                         responsive_height = max(14, int(viewport_height * 0.15))
                         
                         scaled = pixmap.scaledToHeight(responsive_height, Qt.SmoothTransformation)
-                        # Convert to base64 for embedding
                         buffer = QBuffer()
                         buffer.open(QIODevice.WriteOnly)
                         scaled.save(buffer, "PNG")
@@ -311,7 +292,6 @@ def number_to_png_display(number):
         return str(number)
 
 def detect_source_from_query(query: str) -> list:
-    """Detect which booru source the user wants to search in from the query."""
     query_lower = query.lower()
     source_keywords = {
         "gelbooru": ["gel", "gelbooru"],
@@ -327,14 +307,12 @@ def detect_source_from_query(query: str) -> list:
         if any(keyword in query_lower for keyword in keywords):
             detected_sources.append(source.capitalize() if source != "rule34" else "Rule34")
     
-    # If no source detected, use enabled sources
     if not detected_sources:
         detected_sources = SETTINGS.get("enabled_sources", ["Gelbooru"])
     
     return detected_sources
 
 async def _do_hhaven_search(query: str) -> list:
-    """Async helper to search Hentai Haven."""
     import asyncio
     client = hhaven.Client()
     try:
@@ -346,7 +324,6 @@ async def _do_hhaven_search(query: str) -> list:
         await client.close()
 
 async def _do_hhaven_random(count=12) -> list:
-    """Async helper to get multiple random Hentai Haven entries from the homepage."""
     import random
     import asyncio
     client = hhaven.Client()
@@ -364,7 +341,6 @@ async def _do_hhaven_random(count=12) -> list:
         await client.close()
 
 async def _get_hhaven_stream_url(episode: 'hhaven.PartialHentaiEpisode') -> str:
-    """Extracts the direct .m3u8 stream URL from a Hentai Haven episode object."""
     client = hhaven.Client()
     try:
         await client.build()
@@ -374,12 +350,11 @@ async def _get_hhaven_stream_url(episode: 'hhaven.PartialHentaiEpisode') -> str:
         await client.close()
 
 async def _scrape_hhaven_series_page(hentai_obj: 'hhaven.Hentai') -> dict:
-    """Converts a hhaven.Hentai object to the dict format HentaiSeriesDialog expects."""
     episodes = []
     for episode in hentai_obj.episodes:
         episodes.append({
             'title': episode.name,
-            'url': None, # URL is not needed, we pass the object
+            'url': None, 
             'episode_obj': episode
         })
 
@@ -390,7 +365,6 @@ async def _scrape_hhaven_series_page(hentai_obj: 'hhaven.Hentai') -> dict:
     }
 
 class ChatBrowser(QTextBrowser):
-    """Custom QTextBrowser that disables internal navigation to prevent chat reset."""
     def setSource(self, name):
         pass
 
@@ -420,11 +394,11 @@ class MainWindowTitleBar(QWidget):
         self.close_btn = QToolButton(); self.close_btn.clicked.connect(self.parent.close)
         self.close_btn.setObjectName("close_button")
 
-        self.update_icons() # Set initial icons
+        self.update_icons() 
 
         for btn in [self.minimize_btn, self.maximize_btn, self.close_btn]:
             btn.setFixedSize(46, 32)
-            btn.setObjectName("title_bar_button") # Generic class for all title bar buttons
+            btn.setObjectName("title_bar_button") 
 
         layout.addWidget(self.minimize_btn)
         layout.addWidget(self.maximize_btn)
@@ -433,7 +407,6 @@ class MainWindowTitleBar(QWidget):
         self.start_move_pos = None
 
     def _get_icon_color(self):
-        """Determines if theme is dark or light and returns appropriate icon color."""
         palette = self.palette()
         bg_color = palette.color(self.backgroundRole())
         r, g, b = bg_color.red(), bg_color.green(), bg_color.blue()
@@ -466,10 +439,7 @@ class MainWindowTitleBar(QWidget):
 
 class MediaViewerDialog(BaseDialog):
     def __init__(self, posts_list, current_index, parent=None):
-        # Only pass the parent to the QDialog constructor if it's a QWidget.
-        # This allows the dialog to be created in a separate process with a mock parent.
         qt_parent = parent if isinstance(parent, QWidget) else None
-        # Initialize BaseDialog with a placeholder title, we'll set it properly later.
         super().__init__("Media Viewer", qt_parent)
 
         self.parent_app = parent
@@ -483,7 +453,6 @@ class MediaViewerDialog(BaseDialog):
         self.media_stack = QStackedWidget()
         self.content_layout.addWidget(self.media_stack, 1)
 
-        # Image view
         self.image_scroll_area = QScrollArea()
         self.image_scroll_area.setWidgetResizable(True)
         self.image_label = QLabel(_tr("Loading image..."))
@@ -491,11 +460,9 @@ class MediaViewerDialog(BaseDialog):
         self.image_scroll_area.setWidget(self.image_label)
         self.media_stack.addWidget(self.image_scroll_area)
 
-        # Video view - Apollo player for both local and streaming
         self.apollo_video_player = ApolloVideoPlayer()
         self.media_stack.addWidget(self.apollo_video_player)
         
-        # Add a progress overlay to the apollo_video_player's loading label or similar
         self.download_progress_bar = QProgressBar(self.apollo_video_player)
         self.download_progress_bar.setRange(0, 100)
         self.download_progress_bar.setValue(0)
@@ -504,10 +471,9 @@ class MediaViewerDialog(BaseDialog):
         self.download_progress_bar.setStyleSheet("QProgressBar { background: transparent; border: none; } QProgressBar::chunk { background: #3498db; }")
         self.download_progress_bar.hide()
         
-        self.cv_video_player = None  # For compatibility
+        self.cv_video_player = None  
         self.temp_video_file = None
 
-        # Video controls
         self.video_controls = QWidget()
         video_controls_layout = QHBoxLayout(self.video_controls)
         video_controls_layout.setContentsMargins(0, 0, 0, 0)
@@ -544,9 +510,8 @@ class MediaViewerDialog(BaseDialog):
         video_controls_layout.addSpacing(10)
         video_controls_layout.addWidget(self.loop_button)
         video_controls_layout.addWidget(self.fullscreen_button)
-        self.video_controls.setVisible(False) # Hide by default
+        self.video_controls.setVisible(False) 
 
-        # Controls
         controls_layout = QHBoxLayout()
         self.prev_button = QPushButton(qta.icon('fa5s.arrow-left'), _tr(" Previous"))
         self.prev_button.setFocusPolicy(Qt.NoFocus)
@@ -554,7 +519,6 @@ class MediaViewerDialog(BaseDialog):
         self.next_button.setFocusPolicy(Qt.NoFocus)
         self.next_button.setLayoutDirection(Qt.RightToLeft)
 
-        # Zoom controls for images
         self.zoom_in_button = QPushButton(qta.icon('fa5s.search-plus'), "")
         self.zoom_in_button.setFocusPolicy(Qt.NoFocus)
         self.zoom_out_button = QPushButton(qta.icon('fa5s.search-minus'), "")
@@ -586,7 +550,6 @@ class MediaViewerDialog(BaseDialog):
         self.content_layout.addWidget(self.video_controls)
         self.content_layout.addLayout(controls_layout)
 
-        # Connections
         self.prev_button.clicked.connect(self.prev_media)
         self.next_button.clicked.connect(self.next_media)
         self.fav_button.clicked.connect(self.toggle_favorite)
@@ -602,22 +565,12 @@ class MediaViewerDialog(BaseDialog):
         self.zoom_out_button.clicked.connect(lambda: self.zoom_image(0.8))
         self.zoom_fit_button.clicked.connect(self.fit_image_to_window)
 
-        self.threadpool = QThreadPool()
-        self.image_pixmap = None
-        self.zoom_factor = 1.0
-        self.gif_movie = None
-        self.cleanup_thread = None
-
-        self.load_media()
-
-        # Connect signals for Apollo player
         self.apollo_video_player.position_changed.connect(self.update_position)
         self.apollo_video_player.duration_changed.connect(self.update_duration)
         self.apollo_video_player.state_changed.connect(self.update_play_pause_button)
         self.apollo_video_player.download_progress.connect(self.update_download_progress)
         self.apollo_video_player.error.connect(self.on_apollo_error)
         
-        # Shortcuts
         self._setup_shortcuts()
 
     def _setup_shortcuts(self):
@@ -662,7 +615,6 @@ class MediaViewerDialog(BaseDialog):
             self.zoom_image(1.1 if event.angleDelta().y() > 0 else 1 / 1.1)
 
     def update_controls(self):
-        """Updates the state of the control buttons."""
         self.prev_button.setEnabled(self.current_index > 0)
         self.next_button.setEnabled(self.current_index < len(self.posts_list) - 1)
         
@@ -671,7 +623,6 @@ class MediaViewerDialog(BaseDialog):
         self.fav_button.setIcon(qta.icon('fa5s.star', color=fav_icon_color))
 
     def load_media(self):
-        """Main entry point for loading media based on current post."""
         self._stop_current_playback()
         self._update_window_title()
         self.update_controls()
@@ -682,7 +633,6 @@ class MediaViewerDialog(BaseDialog):
             self.media_stack.setCurrentWidget(self.image_scroll_area)
             return
 
-        # Architecture: Delegate to specific loaders
         if file_info["is_video"]:
             self._handle_video_load(file_info)
         elif file_info["is_gif"]:
@@ -729,7 +679,6 @@ class MediaViewerDialog(BaseDialog):
         self.video_controls.setVisible(True)
         for w in self.zoom_controls: w.setVisible(False)
         
-        # Reset slider/labels
         self.seek_slider.setRange(0, 0)
         self.seek_slider.setValue(0)
         self.duration_label.setText("00:00 / 00:00")
@@ -786,7 +735,6 @@ class MediaViewerDialog(BaseDialog):
             self.image_label.setText(_tr("Error: Could not load image."))
 
     def _fetch_raw_data(self, url):
-        """Generic worker function to fetch raw bytes from a URL."""
         try:
             if isinstance(url, str):
                 url = normalize_http_url(url).replace("\\", "/")
@@ -811,7 +759,6 @@ class MediaViewerDialog(BaseDialog):
             self.image_label.setText(_tr("Error loading GIF: {error}").format(error=err or "Unknown"))
             return
 
-        # To load a QMovie from memory, we must use a QBuffer
         self.gif_byte_array = QByteArray(gif_content)
         self.gif_buffer = QBuffer(self.gif_byte_array)
         self.gif_buffer.open(QIODevice.ReadOnly)
@@ -822,14 +769,12 @@ class MediaViewerDialog(BaseDialog):
         self.gif_movie.start()
 
     def _download_video_to_temp(self, url, post_id):
-        """Downloads a video to a temporary file using pure Python (no ffmpeg)."""
         import tempfile
         try:
             file_ext = '.mp4'
             fd, self.temp_video_file = tempfile.mkstemp(dir=snekbooru_temp_dir("media"), suffix=file_ext)
             os.close(fd)
             
-            # Pure Python streaming download - no ffmpeg at all
             try:
                 if isinstance(url, str):
                     url = normalize_http_url(url).replace("\\", "/")
@@ -843,13 +788,11 @@ class MediaViewerDialog(BaseDialog):
                     stream=True
                 )
                 if response.status_code == 200:
-                    # Stream video in chunks to temp file
                     with open(self.temp_video_file, 'wb') as f:
                         for chunk in response.iter_content(chunk_size=8192):
                             if chunk:
                                 f.write(chunk)
                     
-                    # Verify file was written
                     if os.path.getsize(self.temp_video_file) > 0:
                         try:
                             ct = str(response.headers.get("Content-Type") or "").lower()
@@ -889,14 +832,11 @@ class MediaViewerDialog(BaseDialog):
             self.media_stack.setCurrentWidget(self.image_scroll_area)
             return
         
-        # Switch to video player widget
         self.media_stack.setCurrentWidget(self.apollo_video_player)
         
-        # Load and play video
         self._load_video_file(filepath)
 
     def _load_video_stream(self, url):
-        """Load the video stream into Apollo player."""
         try:
             if isinstance(url, str):
                 url = normalize_http_url(url).replace("\\", "/")
@@ -907,7 +847,6 @@ class MediaViewerDialog(BaseDialog):
             self.media_stack.setCurrentWidget(self.image_scroll_area)
 
     def _load_video_file(self, filepath):
-        """Load the video file into Apollo player for local playback."""
         try:
             self.media_stack.setCurrentWidget(self.apollo_video_player)
             self.apollo_video_player.load(filepath)
@@ -924,17 +863,14 @@ class MediaViewerDialog(BaseDialog):
         self.download_progress_bar.hide()
     
     def update_download_progress(self, progress):
-        """Update the download progress bar."""
         if progress > 0 and progress < 100:
             self.download_progress_bar.show()
             self.download_progress_bar.setValue(int(progress))
-            # Position it at the bottom of the video widget
             self.download_progress_bar.setGeometry(0, self.apollo_video_player.height() - 10, self.apollo_video_player.width(), 10)
         else:
             self.download_progress_bar.hide()
     
     def _format_time(self, seconds):
-        """Format seconds to MM:SS format."""
         if seconds < 0:
             seconds = 0
         mins = int(seconds // 60)
@@ -942,35 +878,29 @@ class MediaViewerDialog(BaseDialog):
         return f"{mins:02d}:{secs:02d}"
 
     def _on_slider_moved(self, slider_value):
-        """Handle slider position change (value is in milliseconds)."""
         self.apollo_video_player.seek(slider_value)
 
     def update_position(self, position):
-        """Updates the seek slider and time label. Position is in milliseconds."""
         if not self.seek_slider.isSliderDown():
             self.seek_slider.setValue(position)
         
         duration = self.seek_slider.maximum()
-        # Architecture fix: Always display time if position is known, even if duration is 0 (HLS)
         pos_str = self._format_time(position / 1000)
         dur_str = self._format_time(duration / 1000) if duration > 0 else "--:--"
         self.duration_label.setText(f"{pos_str} / {dur_str}")
 
     def update_duration(self, duration):
-        """Updates the range of the seek slider. Duration is in milliseconds."""
         if duration > 0:
             self.seek_slider.setRange(0, duration)
             self.seek_slider.setEnabled(True)
         else:
-            # For live streams or files where duration isn't available yet
             self.seek_slider.setRange(0, 0)
             self.seek_slider.setEnabled(False)
     
     def _cleanup_temp_video(self, wait_on_close=False):
-        """Schedules the temporary video file for deletion with retries."""
         if self.temp_video_file and os.path.exists(self.temp_video_file):
             filepath_to_delete = self.temp_video_file
-            self.temp_video_file = None # Unset immediately
+            self.temp_video_file = None
 
             def robust_delete():
                 max_attempts = 30 if wait_on_close else 120
@@ -979,11 +909,10 @@ class MediaViewerDialog(BaseDialog):
                         return
                     try:
                         os.remove(filepath_to_delete)
-                        return # Success
+                        return 
                     except OSError:
-                        time.sleep(0.5) # Wait 500ms before retrying
+                        time.sleep(0.5) 
 
-            # If closing, we need to wait for the thread. Otherwise, let it run in the background.
             is_daemon = not wait_on_close
             thread = threading.Thread(target=robust_delete, daemon=is_daemon)
             thread.start()
@@ -1025,7 +954,6 @@ class MediaViewerDialog(BaseDialog):
             self.apollo_video_player.play()
 
     def update_play_pause_button(self, state):
-        """Updates the play/pause button icon based on player state."""
         is_playing = (state == 'playing')
         if is_playing:
             self.play_pause_button.setIcon(qta.icon('fa5s.pause'))
@@ -1035,19 +963,15 @@ class MediaViewerDialog(BaseDialog):
                 self.apollo_video_player.play()
 
     def skip_video(self, seconds):
-        """Skip forward or backward by the given seconds."""
         if self.apollo_video_player.player:
             current_pos = self.apollo_video_player.player.get_position_ms()
             self.apollo_video_player.seek(current_pos + (seconds * 1000))
 
     def set_video_volume(self, volume):
-        """Set volume (0-100)."""
         self.apollo_video_player.set_volume(volume)
 
     def toggle_fullscreen(self):
-        """Toggles fullscreen mode for the dialog."""
         self.apollo_video_player.toggle_fullscreen()
-        # Update the icon based on the dialog state
         if self.isFullScreen():
             self.fullscreen_button.setIcon(qta.icon('fa5s.compress'))
         else:
@@ -1081,14 +1005,11 @@ class MediaViewerDialog(BaseDialog):
             webbrowser.open(url)
             
     def keyPressEvent(self, event):
-        """Handle key presses for navigation and video control."""
         if event.isAutoRepeat():
-            return  # Ignore auto-repeat key events
+            return 
         
-        # F key: toggle fullscreen
         if event.key() == Qt.Key_F:
             self.toggle_fullscreen()
-        # Escape: close dialog
         elif event.key() == Qt.Key_Escape:
             self.close()
         else:
@@ -1100,9 +1021,7 @@ class MediaViewerDialog(BaseDialog):
             self.fit_image_to_window()
 
     def closeEvent(self, event):
-        # Stop the player in the main thread to avoid QObject::killTimer issues
         try:
-            # self.apollo_video_player.stop()
             pass
         except Exception:
             pass
@@ -1110,12 +1029,11 @@ class MediaViewerDialog(BaseDialog):
         if self.gif_movie:
             self.gif_movie.stop()
         
-        self.threadpool.clear() # Stop any running workers
+        self.threadpool.clear() 
         self._cleanup_temp_video(wait_on_close=True)
         
-        # If a cleanup thread was started for closing, wait for it to finish.
         if self.cleanup_thread and self.cleanup_thread.is_alive():
-            self.cleanup_thread.join(timeout=6.0) # Wait up to 6 seconds
+            self.cleanup_thread.join(timeout=6.0) 
 
         super().closeEvent(event)
 
@@ -1134,7 +1052,6 @@ class SourceFetchThread(QThread):
 
     def run(self):
         try:
-            # Enma is initialized globally, so we just use the instance
             enma = self.parent_app.enma
 
             enma.source_manager.set_source(self.source_identifier)
@@ -1170,8 +1087,6 @@ class SourceFetchThread(QThread):
                             if not is_ehentai and isinstance(self.source_identifier, str):
                                 is_ehentai = "e-hentai" in self.source_identifier.lower()
                             
-                            # e-Hentai doesn't use the same Cloudflare logic as nHentai did
-                            # We just re-raise for now or we could implement e-Hentai specific logic if needed
                             raise
                         entries = probe_entries_from_result(res)
                         if not entries:
@@ -1199,6 +1114,7 @@ class SourceFetchThread(QThread):
             tb = traceback.format_exc()
             self.finished.emit(self.source_identifier, [], {}, {"exception": str(e), "trace": tb})
 
+
 class GelDanApp(QWidget):
     def __init__(self, is_incognito=False):
         super().__init__()
@@ -1211,7 +1127,6 @@ class GelDanApp(QWidget):
         self.apply_window_settings()
         self.center_on_screen()
 
-        # State
         self.posts = []
         self.limit = QSpinBox()
         self.limit.setRange(1, 1000); self.limit.setValue(SETTINGS.get("posts_per_page", 60))
@@ -1268,8 +1183,8 @@ class GelDanApp(QWidget):
         self.manga_current_source_id = "ALL"
         self.ai_chat_ui = {}
         self.ai_search_results = {}
-        self.ai_chat_displayed_posts = {}  # Maps chat_index -> list of post IDs to display
-        self.ai_chat_message_count = {}  # Tracks message count per chat for proper image positioning
+        self.ai_chat_displayed_posts = {}  
+        self.ai_chat_message_count = {}  
         self.ai_input_areas = []
         self.ai_can_send = True
         self.ai_cooldown_timer = QTimer(self)
@@ -1345,9 +1260,9 @@ class GelDanApp(QWidget):
             self.tabs.setTabVisible(self.tabs.indexOf(self.downloads_tab), False)
             self.tabs.setTabVisible(self.tabs.indexOf(self.favorites_tab), False)
             self.tabs.setTabVisible(self.tabs.indexOf(self.minigames_tab), False)
-            self.tabs.setCurrentIndex(1) # Start on browser tab for incognito
+            self.tabs.setCurrentIndex(1) 
         else:
-            self.tabs.setCurrentIndex(0) # Start on home tab
+            self.tabs.setCurrentIndex(0) 
         
         self.apply_theme()
 
@@ -1366,7 +1281,6 @@ class GelDanApp(QWidget):
         self.manga_thumb_cache.clear()
 
     def resizeEvent(self, event):
-        """Override resize event to refresh grid if auto-scaling is on."""
         super().resizeEvent(event)
         if hasattr(self, 'tabs') and SETTINGS.get("auto_scale_grid", False):
             self.refresh_visible_grid()
@@ -1377,7 +1291,6 @@ class GelDanApp(QWidget):
         super().changeEvent(event)
 
     def center_on_screen(self):
-        """Centers the window on the primary screen."""
         self.move(QApplication.desktop().screen().rect().center() - self.rect().center())
 
     def keyPressEvent(self, event):
@@ -1559,13 +1472,12 @@ class GelDanApp(QWidget):
                 source.selectAll()
         
         if event.type() == QEvent.KeyPress and source in self.ai_input_areas:
-            # Check for Ctrl+Enter to send AI message
             if event.key() in (Qt.Key_Return, Qt.Key_Enter) and (event.modifiers() & Qt.ControlModifier):
                 try:
                     self.send_ai_message()
                 except Exception as e:
                     QMessageBox.warning(self, _tr("Error"), _tr("Could not send message: {error}").format(error=str(e)))
-                return True # Event handled
+                return True 
 
         if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter):
             try:
@@ -1615,7 +1527,7 @@ class GelDanApp(QWidget):
             icon = QIcon(icon_path)
             self.setWindowIcon(icon)
             self.title_bar.icon_label.setPixmap(icon.pixmap(24, 24))
-        else: # Fallback icon
+        else:
             self.title_bar.icon_label.setPixmap(qta.icon('fa5s.dragon', color='white').pixmap(24, 24))
 
     def load_hotkeys(self):
@@ -1883,7 +1795,6 @@ class GelDanApp(QWidget):
         return widget
 
     def create_hentai_tab(self):
-        """Creates the UI for the Hentai Haven tab."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
@@ -1895,7 +1806,6 @@ class GelDanApp(QWidget):
             layout.addWidget(label)
             return widget
 
-        # Search controls
         controls_group = QGroupBox(_tr("Search Hentai Haven"))
         controls_layout = QHBoxLayout(controls_group)
         self.hentai_search_input = QLineEdit()
@@ -1911,7 +1821,6 @@ class GelDanApp(QWidget):
         controls_layout.addWidget(self.hentai_random_btn)
         layout.addWidget(controls_group)
 
-        # Results grid
         self.hentai_scroll = QScrollArea(); self.hentai_scroll.setWidgetResizable(True)
         self.hentai_grid_host = QWidget()
         self.hentai_grid = QGridLayout(self.hentai_grid_host)
@@ -1931,7 +1840,6 @@ class GelDanApp(QWidget):
         return widget
 
     def search_hentai(self):
-        """Initiates a search on Hentai Haven."""
         query = self.hentai_search_input.text().strip()
         if not query: return
         self.hentai_status_label.setText(_tr("Searching..."))
@@ -1940,14 +1848,12 @@ class GelDanApp(QWidget):
         self.threadpool.start(worker)
 
     def random_hentai(self):
-        """Fetches a random video from Hentai Haven."""
         self.hentai_status_label.setText(_tr("Fetching random video..."))
         worker = AsyncApiWorker(_do_hhaven_random)
         worker.signals.finished.connect(self.on_hentai_search_finished)
         self.threadpool.start(worker)
 
     def on_hentai_search_finished(self, results, err):
-        """Populates the grid with results from Hentai Haven."""
         self.clear_grid(self.hentai_grid)
         self.hentai_post_to_widget_map.clear()
         if err:
@@ -1964,7 +1870,6 @@ class GelDanApp(QWidget):
         self.populate_grid(self.hentai_grid, posts, self.hentai_post_to_widget_map, self.on_hentai_thumbnail_clicked, viewport_width=self.hentai_scroll.viewport().width())
 
     def on_hentai_thumbnail_clicked(self, post: dict, widget: ThumbnailWidget):
-        """Scrapes the series page and opens a dialog with episode info."""
         hentai_obj = post.get("hh_object")
         if not hentai_obj: return
 
@@ -1980,17 +1885,16 @@ class GelDanApp(QWidget):
         self.threadpool.start(worker)
 
     def _adapt_hhaven_to_post(self, hentai_obj):
-        """Converts an hhaven.Hentai object to the app's internal post dictionary format."""
         return {
             "id": f"hh_{hentai_obj.id}",
             "preview_url": hentai_obj.thumbnail,
-            "file_url": None, # No direct file URL
+            "file_url": None, 
             "rating": "explicit",
             "score": hentai_obj.rating.votes,
             "tags": ", ".join([tag.name for tag in hentai_obj.tags]),
             "source_post_url": f"https://hentaihaven.xxx/watch/{hentai_obj.name}",
-            "hh_object": hentai_obj, # Store the full object for later use
-            "file_ext": "mp4" # Assume video
+            "hh_object": hentai_obj, 
+            "file_ext": "mp4" 
         }
 
     def fetch_site_stats(self):
@@ -2046,7 +1950,6 @@ class GelDanApp(QWidget):
         
         total_count, _ = data
         if isinstance(total_count, int):
-            # Use PNG digit images if available, otherwise use text
             png_display = number_to_png_display(total_count)
             self.total_posts_label.setText(png_display)
         elif total_count == 0:
@@ -2202,7 +2105,7 @@ class GelDanApp(QWidget):
         pager_layout.addWidget(self.page_count_label)
         layout.addLayout(pager_layout)
 
-        self.prev_btn.clicked.connect(self.prev_page) # This should call search, not start_new_search
+        self.prev_btn.clicked.connect(self.prev_page) 
         self.next_btn.clicked.connect(self.next_page)
 
         return widget
@@ -2539,12 +2442,10 @@ class GelDanApp(QWidget):
         widget = QWidget()
         layout = QHBoxLayout(widget)
 
-        # Left pane for chat list and preset management
         left_pane = QWidget()
         left_layout = QVBoxLayout(left_pane)
         left_pane.setMaximumWidth(300)
 
-        # Chat list
         chat_list_group = QGroupBox(_tr("Chats"))
         chat_list_layout = QVBoxLayout(chat_list_group)
         self.ai_chat_list = QListWidget()
@@ -2564,7 +2465,6 @@ class GelDanApp(QWidget):
         chat_list_layout.addLayout(chat_buttons)
         left_layout.addWidget(chat_list_group)
 
-        # Preset management
         preset_group = QGroupBox(_tr("AI Presets"))
         preset_layout = QVBoxLayout(preset_group)
         self.ai_preset_combo = QComboBox()
@@ -2583,23 +2483,18 @@ class GelDanApp(QWidget):
 
         layout.addWidget(left_pane)
 
-        # Right pane for chat interface and personalization
         right_tabs = QTabWidget()
         
-        # Chat Tab
         chat_widget = QWidget()
         chat_layout = QVBoxLayout(chat_widget)
 
-        # This stack will hold either the chat tabs or the welcome message
         self.ai_chat_area_stack = QStackedWidget()
 
-        # The QTabWidget for the actual chats
         self.ai_chat_tabs = QTabWidget()
         self.ai_chat_tabs.setTabsClosable(False)
         self.ai_chat_tabs.setMovable(True)
         self.ai_chat_area_stack.addWidget(self.ai_chat_tabs)
 
-        # The "Get Started" message widget
         self.ai_no_chats_widget = QWidget()
         no_chats_layout = QVBoxLayout(self.ai_no_chats_widget)
         no_chats_layout.setAlignment(Qt.AlignCenter)
@@ -2611,12 +2506,11 @@ class GelDanApp(QWidget):
 
         chat_layout.addWidget(self.ai_chat_area_stack)
 
-        # Shared input area, moved outside the tab widget
         self.ai_shared_input_area = QPlainTextEdit()
         self.ai_shared_input_area.setObjectName("ai_chat_input_area")
         self.ai_shared_input_area.setPlaceholderText(_tr("Type your message here... Press Ctrl+Enter to send."))
         self.ai_shared_input_area.setMaximumHeight(120)
-        self.ai_input_areas.append(self.ai_shared_input_area) # Add to list for event filter
+        self.ai_input_areas.append(self.ai_shared_input_area) 
         self.ai_shared_input_area.installEventFilter(self)
 
         self.ai_shared_send_button = QPushButton(qta.icon('fa5s.paper-plane'), _tr("Send"))
@@ -2624,13 +2518,11 @@ class GelDanApp(QWidget):
 
         chat_layout.addWidget(self.ai_shared_input_area)
         chat_layout.addWidget(self.ai_shared_send_button)
-        # Personalization Tab
         personalization_group = QGroupBox(_tr("Personalization"))
         personalization_layout = QFormLayout(personalization_group)
-        self.ai_name_edit = QLineEdit() # This will now be part of the personalization tab
+        self.ai_name_edit = QLineEdit() 
         self.ai_persona_edit = QPlainTextEdit()
         
-        # Provider selector
         self.ai_provider_combo = QComboBox()
         self.ai_provider_combo.addItems(["OpenRouter", "Google Gemini (Experimental)"])
         self.ai_provider_combo.currentTextChanged.connect(self.on_ai_provider_changed)
@@ -2654,7 +2546,6 @@ class GelDanApp(QWidget):
         personalization_layout.addRow(_tr("Gemini Model:"), self.ai_gemini_model_combo)
         personalization_layout.addRow(self.ai_allow_spicy_check)
 
-        # Sliders
         from PyQt5.QtWidgets import QSlider
         self.ai_formal_casual_slider = QSlider(Qt.Horizontal)
         self.ai_helpful_sassy_slider = QSlider(Qt.Horizontal)
@@ -2689,7 +2580,6 @@ class GelDanApp(QWidget):
 
         game_tabs = QTabWidget()
 
-        # Post Showdown (Score Guesser)
         post_showdown_game = PostShowdownGame(self)
         game_tabs.addTab(post_showdown_game, _tr("Post Showdown"))
 
@@ -3159,7 +3049,6 @@ class GelDanApp(QWidget):
             out_dir = snekbooru_temp_dir("manga", "ehentai", str(gid))
             try:
                 os.makedirs(out_dir, exist_ok=True)
-                # Verify it exists
                 if not os.path.isdir(out_dir):
                     raise RuntimeError(f"Failed to create directory: {out_dir}")
             except Exception as e:
@@ -3282,7 +3171,6 @@ class GelDanApp(QWidget):
                 print(f"DEBUG: out_dir missing before reader: {out_dir}")
                 os.makedirs(out_dir, exist_ok=True)
             
-            # Check if any images were actually downloaded
             image_files = list_image_files(out_dir)
             if not image_files:
                 QMessageBox.warning(self, _tr("No images"), _tr("No images were downloaded for this gallery."))
@@ -3486,7 +3374,7 @@ class GelDanApp(QWidget):
 
     def on_manga_cover_loaded(self, pixmap, post_data):
         widget = post_data.get("widget")
-        if widget and not pixmap.isNull(): # This is for manga covers
+        if widget and not pixmap.isNull(): 
             widget.set_pixmap(pixmap)
 
     def add_favorite_category(self):
@@ -3533,7 +3421,6 @@ class GelDanApp(QWidget):
 
     def populate_favorite_categories(self):
         self.fav_category_list.clear()
-        # Ensure Uncategorized is always first
         if "Uncategorized" in self.favorites:
             self.fav_category_list.addItem("Uncategorized")
         
@@ -3541,7 +3428,6 @@ class GelDanApp(QWidget):
             if category != "Uncategorized":
                 self.fav_category_list.addItem(category)
         
-        # Select the previously selected or default category
         items = self.fav_category_list.findItems(self.current_favorites_category, Qt.MatchExactly)
         if items:
             self.fav_category_list.setCurrentItem(items[0])
@@ -3700,28 +3586,25 @@ class GelDanApp(QWidget):
         dir_path = QFileDialog.getExistingDirectory(self, _tr("Select Folder to Import"))
         if not dir_path: return
 
-        # This can be a long operation, should be done in a worker thread in a real app
-        # For now, we'll do it synchronously with a message box
         QMessageBox.information(self, _tr("Importing"), _tr("Importing files... The app may freeze."))
         
         imported_count = 0
         for filename in os.listdir(dir_path):
             if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp', '.mp4', '.webm')):
                 file_path = os.path.join(dir_path, filename)
-                # Create a mock post object
-                mock_post = {
+            mock_post = {
                     "id": f"local_{filename}",
                     "file_url": f"file:///{file_path}",
                     "source_post_url": f"file:///{file_path}",
                     "tags": "local_import",
                     "file_ext": filename.split('.')[-1].lower(),
                     "local_path": file_path,
-                    "local_thumbnail_path": None # No thumb for local imports yet
+                    "local_thumbnail_path": None 
                 }
-                file_hash = get_file_hash(mock_post)
-                if file_hash not in self.downloads_data:
-                    self.downloads_data[file_hash] = mock_post
-                    imported_count += 1
+            file_hash = get_file_hash(mock_post)
+            if file_hash not in self.downloads_data:
+                self.downloads_data[file_hash] = mock_post
+                imported_count += 1
         
         save_downloads_data(self.downloads_data)
         QMessageBox.information(self, _tr("Import Complete"), _tr("Imported {count} new files.").format(count=imported_count))
@@ -3743,7 +3626,6 @@ class GelDanApp(QWidget):
             self.load_ai_preset_settings(index)
 
     def on_ai_provider_changed(self, provider):
-        """Toggle between OpenRouter and Gemini model fields."""
         is_gemini = provider == "Google Gemini (Experimental)"
         self.ai_model_edit.setVisible(not is_gemini)
         self.ai_gemini_model_combo.setVisible(is_gemini)
@@ -3755,18 +3637,15 @@ class GelDanApp(QWidget):
             self.ai_name_edit.setText(preset.get("name", ""))
             self.ai_persona_edit.setPlainText(preset.get("persona", ""))
             
-            # Set provider
             provider = preset.get("provider", "OpenRouter")
             self.ai_provider_combo.blockSignals(True)
             self.ai_provider_combo.setCurrentText(provider)
             self.ai_provider_combo.blockSignals(False)
             
-            # Update model display based on provider
             self.on_ai_provider_changed(provider)
             
             self.ai_model_edit.setText(preset.get("model", ""))
             
-            # Set Gemini model if applicable
             if provider == "Google Gemini (Experimental)":
                 gemini_model = preset.get("model", "gemini-2.0-flash")
                 idx = self.ai_gemini_model_combo.findText(gemini_model)
@@ -3788,7 +3667,6 @@ class GelDanApp(QWidget):
             preset["persona"] = self.ai_persona_edit.toPlainText()
             preset["provider"] = self.ai_provider_combo.currentText()
             
-            # Save the appropriate model based on selected provider
             if self.ai_provider_combo.currentText() == "Google Gemini (Experimental)":
                 preset["model"] = self.ai_gemini_model_combo.currentText()
             else:
@@ -3801,7 +3679,7 @@ class GelDanApp(QWidget):
             preset["creativity"] = self.ai_creativity_slider.value()
             
             save_settings(SETTINGS)
-            self.populate_ai_presets() # Refresh combo box text
+            self.populate_ai_presets() 
             QMessageBox.information(self, _tr("Preset Saved"), _tr("AI preset '{name}' has been updated.").format(name=preset["name"]))
 
     def new_ai_preset(self):
@@ -3850,7 +3728,6 @@ class GelDanApp(QWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         
-        # CRITICAL: Use the custom ChatBrowser to prevent navigation-based chat resets
         history_browser = ChatBrowser()
         history_browser.setOpenExternalLinks(False)
         history_browser.anchorClicked.connect(self.on_chat_anchor_clicked)
@@ -3865,7 +3742,6 @@ class GelDanApp(QWidget):
             "history_browser": history_browser
         }
         
-        # Populate history from source of truth
         self._rebuild_chat_display(tab_index)
 
 
@@ -3874,7 +3750,6 @@ class GelDanApp(QWidget):
             index = self.ai_chat_list.row(current)
             self.ai_chat_tabs.setCurrentIndex(index)
             SETTINGS["ai_active_chat_index"] = index
-            # Rebuild display from source of truth
             self._rebuild_chat_display(index)
 
     def new_ai_chat(self):
@@ -3905,30 +3780,26 @@ class GelDanApp(QWidget):
         
         del SETTINGS["ai_chats"][active_index]
         
-        # Also clean up displayed posts for this chat
         if active_index in self.ai_chat_displayed_posts:
             del self.ai_chat_displayed_posts[active_index]
         
-        # If we deleted the last chat, set index to -1, otherwise select the first one.
         if not SETTINGS.get("ai_chats"):
             SETTINGS["ai_active_chat_index"] = -1
         else:
             SETTINGS["ai_active_chat_index"] = 0
             
         save_settings(SETTINGS)
-        # This will re-render the UI, showing the new chat tab
         self.populate_ai_chats()
 
     def send_ai_message(self):
         active_index = self.ai_chat_tabs.currentIndex()
 
-        # If no chats exist, create one first
         if active_index < 0 and not SETTINGS.get("ai_chats"):
             SETTINGS["ai_chats"] = [{"name": "Chat 1", "history": []}]
             SETTINGS["ai_active_chat_index"] = 0
             save_settings(SETTINGS)
-            self.populate_ai_chats() # This will create and switch to the new tab
-            active_index = 0 # The new chat is at index 0
+            self.populate_ai_chats() 
+            active_index = 0 
 
         if active_index < 0: return
         chat_index = active_index
@@ -3942,65 +3813,49 @@ class GelDanApp(QWidget):
 
         if not user_message: return
 
-        # Disable input and start cooldown
         self.ai_shared_input_area.setEnabled(False)
         self.ai_shared_send_button.setEnabled(False)
         self.ai_can_send = False
 
-        # Update UI immediately
         import markdown
         ui["history_browser"].append(f"<b>You:</b><br>{markdown.markdown(user_message)}<hr>")
         self.ai_shared_input_area.clear()
 
-        # Update data store for the current chat
         chat_history = SETTINGS["ai_chats"][active_index]["history"]
         chat_history.append({"role": "user", "content": user_message})
 
-        # Prepare messages for API with rich context
         active_preset = SETTINGS["ai_presets"][SETTINGS["ai_active_preset_index"]]
         system_prompt = self._prepare_ai_system_prompt(active_preset)
         
         messages = [{"role": "system", "content": system_prompt}] + chat_history
 
-        # Start worker
         worker = AIStreamWorker(messages, temperature=active_preset["creativity"] / 100.0)
         worker.signals.chunk.connect(lambda chunk: self.on_ai_chunk_received(chunk, active_index))
         worker.signals.finished.connect(lambda full_response: self.on_ai_finished(full_response, active_index))
         worker.signals.error.connect(self.on_ai_error)
         self.threadpool.start(worker)
 
-        # Add a placeholder for AI response
         ui["history_browser"].append("<b>AI:</b><br>")
 
-    def on_ai_chunk_received(self, chunk, chat_index):
         if chat_index == self.ai_chat_tabs.currentIndex():
             ui = self.ai_chat_ui[chat_index]
-            # Improved streaming display: avoid replacing spaces with &nbsp; which breaks HTML tags
-            # Instead, we append raw text or handle it via a cursor more intelligently
             cursor = ui["history_browser"].textCursor()
             cursor.movePosition(QTextCursor.End)
             
-            # Simple text insertion to avoid breaking ongoing HTML/Markdown tags
-            # We'll do a full markdown render on finish
             cursor.insertText(chunk)
             ui["history_browser"].moveCursor(QTextCursor.End)
 
     def on_ai_finished(self, full_response, chat_index):
-        # Update data store
         SETTINGS["ai_chats"][chat_index]["history"].append({"role": "assistant", "content": full_response})
         save_settings(SETTINGS)
 
-        # Full re-render of the chat for perfect markdown display
         self.render_ai_chat_history(chat_index)
 
-        # Execute any tools/actions the AI requested
         self.process_ai_actions(full_response, chat_index)
 
-        # Start cooldown timer
         self.ai_cooldown_timer.singleShot(1000, lambda: self.reset_ai_cooldown(chat_index))
 
     def render_ai_chat_history(self, chat_index):
-        """Renders the entire chat history as clean Markdown/HTML, including embedded search results."""
         ui = self.ai_chat_ui[chat_index]
         history = SETTINGS["ai_chats"][chat_index].get("history", [])
         
@@ -4009,16 +3864,11 @@ class GelDanApp(QWidget):
         for msg in history:
             role = _tr("You") if msg["role"] == "user" else _tr("AI")
             color = "lightblue" if msg["role"] == "user" else "lightgreen"
-            
-            # Render text content
             content_html = markdown.markdown(msg["content"])
-            
-            # Check for embedded search results in this message
             results_html = ""
             if "search_results" in msg:
                 results_html = "<div style='margin-top: 10px;'>"
                 for res in msg["search_results"]:
-                    # We use a cached base64 image if available, otherwise just a link/placeholder
                     img_src = f"data:image/png;base64,{res['image_data']}" if 'image_data' in res else ""
                     if img_src:
                         badge = " <span style='background: rgba(0,0,0,0.7); color: white; padding: 1px 4px; border-radius: 2px; font-size: 10px;'>▶ Video</span>" if res.get('is_video') else ""
@@ -4031,17 +3881,13 @@ class GelDanApp(QWidget):
         ui["history_browser"].moveCursor(QTextCursor.End)
 
     def _rebuild_chat_display(self, chat_index):
-        """Source of truth rebuild for the chat UI."""
         if chat_index in self.ai_chat_ui:
             self.render_ai_chat_history(chat_index)
 
     def process_ai_actions(self, response, chat_index):
-        """Parses and executes multiple actions from an AI response."""
-        # 1. Search Action (e.g. {SEARCH: tags, sort=random, page=1})
         search_match = re.search(r'\{+SEARCH: (.*?)\}+', response, re.DOTALL)
         if search_match:
             params_str = search_match.group(1).replace('\n', ' ').strip()
-            # Parse parameters
             tags = params_str
             sort = None
             page = 0
@@ -4057,20 +3903,17 @@ class GelDanApp(QWidget):
             
             self.perform_ai_image_search(tags, chat_index, sort=sort, page=page)
             
-        # 2. Update Setting Action (e.g. {UPDATE_SETTING: active_theme=Light (Default)})
         setting_match = re.search(r'\{+UPDATE_SETTING: (.*?)=(.*?)\}+', response)
         if setting_match:
             key, val = setting_match.group(1).strip(), setting_match.group(2).strip()
             if key in SETTINGS:
-                # Handle boolean strings
                 if val.lower() == "true": val = True
                 elif val.lower() == "false": val = False
                 
                 SETTINGS[key] = val
                 save_settings(SETTINGS)
-                self.reapply_settings() # Apply changes (theme, etc.)
+                self.reapply_settings() 
                 
-        # 3. Random Favorite Action
         if "{RANDOM_FAVORITE}" in response:
             all_favs = []
             for cat in self.favorites.values(): all_favs.extend(cat.values())
@@ -4078,28 +3921,21 @@ class GelDanApp(QWidget):
                 post = random.choice(all_favs)
                 self.open_post_full(post)
 
-        # 4. Show Similar Action (e.g. {SHOW_SIMILAR: hh_12345})
         similar_match = re.search(r'\{+SHOW_SIMILAR: (.*?)\}+', response)
         if similar_match:
             post_id = similar_match.group(1).strip()
-            # Try to find the post in any map
             post = self._find_post_by_id_globally(post_id)
             if post:
                 tags = post.get("tags", "")
-                # Take first 3-5 tags for a good similar search
                 search_tags = " ".join(tags.split()[:5])
                 self.perform_ai_image_search(search_tags, chat_index)
 
     def _get_app_stats_for_ai(self):
-        """Compiles current app statistics for AI context."""
         fav_count = sum(len(posts) for posts in self.favorites.values())
         down_count = len(self.downloads_data)
         active_sources = SETTINGS.get("enabled_sources", [])
         
-        # Get recent history
         recent_searches = self.search_history[:10] if hasattr(self, 'search_history') else []
-        
-        # Get info about the last post the user clicked
         last_post_info = None
         if hasattr(self, 'last_selected') and self.last_selected:
             last_post_info = {
@@ -4120,7 +3956,6 @@ class GelDanApp(QWidget):
         }
 
     def _prepare_ai_system_prompt(self, preset):
-        """Builds a rich system prompt with real-time app context."""
         base_persona = preset.get("persona", "")
         stats = self._get_app_stats_for_ai()
         pref_tags = SETTINGS.get("preferred_tags", "").replace("\n", ", ")
@@ -4146,15 +3981,11 @@ Current state of the application:
         return f"{base_persona}\n\n{context}"
 
     def _find_post_by_id_globally(self, post_id):
-        """Searches for a post by ID across all known data structures."""
-        # Check current search results
         if hasattr(self, 'posts'):
             for p in self.posts:
                 if p.get('id') == post_id: return p
-        # Check favorites
         for cat in self.favorites.values():
             if post_id in cat: return cat[post_id]
-        # Check downloads
         for p in self.downloads_data.values():
             if p.get('id') == post_id: return p
         return None
@@ -4162,7 +3993,6 @@ Current state of the application:
     def perform_ai_image_search(self, tags, chat_index, is_fallback=False, original_tags=None, retry_count=0, sort=None, page=0):
         ui = self.ai_chat_ui[chat_index]
         
-        # Apply sorting tags if specified
         search_tags = tags
         if sort == "random": search_tags += " sort:random"
         elif sort == "score": search_tags += " sort:score"
@@ -4172,7 +4002,6 @@ Current state of the application:
             ui["history_browser"].append(f"<i>Searching database for: {tags} (page {page+1}, sort: {sort or 'default'})...</i><br>")
             original_tags = tags
         
-        # Detect if user explicitly requests adult content
         tags_lower = tags.lower()
         explicit_keywords = [
             'porn', 'hentai', 'xxx', 'nsfw', 'explicit', 'adult',
@@ -4183,16 +4012,12 @@ Current state of the application:
         
         has_explicit_request = any(keyword in tags_lower for keyword in explicit_keywords)
         
-        # Add NSFW filter by default UNLESS user explicitly requests adult content
         search_tags = tags
         if not has_explicit_request and 'rating:' not in tags_lower:
-            # Add safe rating filter by default only if no explicit request
             search_tags = f"{tags} rating:safe" if tags.strip() else "rating:safe"
         
-        # Detect which source the user wants
         detected_sources = detect_source_from_query(tags)
         
-        # Check for media type preference (gif, video, webm, mp4, etc.)
         media_preference = None
         if any(ext in tags_lower for ext in ['gif', 'video', 'webm', 'mp4', 'animated']):
             media_preference = 'video'
@@ -4212,86 +4037,70 @@ Current state of the application:
 
         posts, _ = data
         if not posts:
-            # Fallback: retry with simplified search terms if we haven't already
             if original_tags is None:
-                original_tags = ""  # Will be set by perform_ai_image_search
+                original_tags = ""  
             
-            # Try fallback searches: remove modifiers and retry
             fallback_searches = []
             if retry_count == 0 and original_tags:
-                # First fallback: remove " different", " another", etc.
                 fallback = original_tags.replace(" different", "").replace(" another", "").replace(" alt ", " ").strip()
                 if fallback and fallback != original_tags:
                     fallback_searches.append(fallback)
                 
-                # Second fallback: take only the first word
                 first_word = original_tags.split()[0] if original_tags.split() else ""
                 if first_word and first_word != fallback:
                     fallback_searches.append(first_word)
             
-            # If we have fallback searches, try them
             if fallback_searches:
                 ui["history_browser"].append(f"<i>No results for '{original_tags}', trying: {fallback_searches[0]}...</i><br>")
                 self.perform_ai_image_search(fallback_searches[0], chat_index, is_fallback=True, original_tags=original_tags, retry_count=retry_count+1)
                 return
             
-            # Ultimate fallback: search for popular anime characters
             ui["history_browser"].append(f"<i>No images found, showing popular anime...</i><br>")
             self.perform_ai_image_search("anime girl", chat_index, is_fallback=True, original_tags=original_tags, retry_count=retry_count+1)
             return
 
-        # Track the message index where search results begin
         if chat_index not in self.ai_chat_message_count:
             self.ai_chat_message_count[chat_index] = len(SETTINGS.get("ai_chats", [{}])[chat_index].get("history", []))
         message_index = self.ai_chat_message_count[chat_index]
         
-        # Load thumbnails asynchronously and display them
         html = "<div style='margin-top: 5px;' id='ai_search_results'>"
         html += "</div><br>"
         
         ui["history_browser"].append(html)
         ui["history_browser"].moveCursor(QTextCursor.End)
         
-        # Load only the first thumbnail asynchronously
         if posts:
-            post = posts[0]  # Only use the first result
+            post = posts[0]
             self.ai_search_results[post['id']] = post
             preview = post.get('preview_url')
             file_url = post.get('file_url')
             file_ext = post.get('file_ext', '').lower()
             
-            # Check if it's a video/GIF based on file extension
             is_video = file_ext in ['mp4', 'webm', 'gif', 'mov', 'avi']
             
             if preview:
-                # Use ImageWorker to load the thumbnail
                 worker = ImageWorker(preview, post)
                 worker.signals.finished.connect(lambda pix, p=post, idx=chat_index, msg_idx=message_index: self.on_ai_thumbnail_loaded(pix, p, idx, msg_idx))
                 self.threadpool.start(worker)
 
     def on_ai_thumbnail_loaded(self, pixmap, post, chat_index, message_index=None):
-        """Inserts a loaded thumbnail into the AI chat results at the correct position."""
         if pixmap.isNull() or chat_index not in self.ai_chat_ui:
             return
         
         ui = self.ai_chat_ui[chat_index]
         history_browser = ui["history_browser"]
         
-        # Convert pixmap to base64 for embedding in HTML
         from PyQt5.QtCore import QBuffer, QIODevice
         buffer = QBuffer()
         buffer.open(QIODevice.WriteOnly)
         pixmap.save(buffer, "PNG")
         image_data = base64.b64encode(buffer.data()).decode()
         
-        # Determine if it's a video
         file_ext = post.get('file_ext', '').lower()
         is_video = file_ext in ['mp4', 'webm', 'gif', 'mov', 'avi']
 
-        # Store the result in the history message so it persists and renders in place
         history = SETTINGS["ai_chats"][chat_index].get("history", [])
         if history:
-            # Find the most recent assistant message to attach results to
             for msg in reversed(history):
                 if msg["role"] == "assistant":
                     if "search_results" not in msg:
@@ -4303,7 +4112,6 @@ Current state of the application:
                     })
                     break
         
-        # Trigger a re-render to show the new result in context
         self.render_ai_chat_history(chat_index)
         save_settings(SETTINGS)
 
@@ -4311,21 +4119,16 @@ Current state of the application:
         self.ai_can_send = True
         if chat_index in self.ai_chat_ui:
             ui = self.ai_chat_ui[chat_index]
-            # Re-enable input
         self.ai_shared_input_area.setEnabled(True)
         self.ai_shared_send_button.setEnabled(True)
         self.ai_shared_input_area.setFocus()
 
-    def on_ai_error(self, error_message):
         active_index = self.ai_chat_tabs.currentIndex()
         QMessageBox.critical(self, _tr("AI Error"), error_message)
-        # We should also update the UI to show the error
         active_index = self.ai_chat_tabs.currentIndex()
         if active_index >= 0:
             ui = self.ai_chat_ui[active_index]
             ui["history_browser"].append(f"<b style='color:red;'>Error: {error_message}</b><hr>")
-            
-            # Re-enable input on error
             self.reset_ai_cooldown(active_index)
             self.ai_shared_input_area.setEnabled(True)
             self.ai_shared_send_button.setEnabled(True)
@@ -4337,7 +4140,6 @@ Current state of the application:
             post_id = url_str.split(":")[1]
             post = self.ai_search_results.get(post_id)
             if post:
-                # Open a custom AI post viewer dialog
                 self.open_ai_post_viewer(post)
             else:
                 QMessageBox.warning(self, _tr("Error"), _tr("Could not load post details."))
@@ -4345,27 +4147,20 @@ Current state of the application:
             webbrowser.open(url_str)
 
     def open_ai_post_viewer(self, post):
-        """Open a custom dialog to view the AI-found post with options."""
         from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QScrollArea, QLabel, QPushButton
         from snekbooru.ui.dialogs import CustomTitleBar
         
         dialog = QDialog(self)
-        dialog.setWindowFlags(dialog.windowFlags() | Qt.FramelessWindowHint)  # Remove default title bar
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.FramelessWindowHint)  
         dialog.setGeometry(100, 100, 900, 700)
-        dialog.setModal(False)  # Non-modal to prevent blocking the main window
-        
-        # Add custom title bar
+        dialog.setModal(False)  
         main_layout = QVBoxLayout(dialog)
-        main_layout.setContentsMargins(0, 0, 0, 0)  # No margins for title bar
+        main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
         title_bar = CustomTitleBar(dialog, _tr("Post Viewer"), has_icon=False)
         main_layout.addWidget(title_bar)
-        
-        # Content layout
         layout = QVBoxLayout()
         main_layout.addLayout(layout)
-        
-        # Create a scroll area for the media
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         media_widget = QWidget()
@@ -4374,12 +4169,9 @@ Current state of the application:
         file_url = post.get('file_url')
         preview_url = post.get('preview_url')
         file_ext = post.get('file_ext', '').lower()
-        
-        # Determine media type and display accordingly
         is_video = file_ext in ['mp4', 'webm', 'gif', 'mov', 'avi']
         
         if is_video and file_url:
-            # For videos, show a play button and info
             video_info = QLabel(f"<b>Video Preview</b><br>Format: {file_ext.upper()}<br><a href='{file_url}'>Click here to view full video</a>")
             video_info.setOpenExternalLinks(True)
             media_layout.addWidget(video_info)
@@ -4398,7 +4190,6 @@ Current state of the application:
                 except Exception as e:
                     media_layout.addWidget(QLabel(f"<i>Could not load preview: {str(e)}</i>"))
         else:
-            # For images, display the preview
             if preview_url or file_url:
                 url_to_load = preview_url or file_url
                 try:
@@ -4417,8 +4208,6 @@ Current state of the application:
         media_layout.addStretch()
         scroll.setWidget(media_widget)
         layout.addWidget(scroll)
-        
-        # Post info section
         info_text = f"<b>Post ID:</b> {post.get('id')}<br>"
         info_text += f"<b>Rating:</b> {post.get('rating', 'Unknown')}<br>"
         info_text += f"<b>Score:</b> {post.get('score', 'N/A')}<br>"
@@ -4428,8 +4217,6 @@ Current state of the application:
         info_label = QLabel(info_text)
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
-        
-        # Action buttons
         button_layout = QHBoxLayout()
         
         open_full_btn = QPushButton(qta.icon('fa5s.expand'), _tr(" Open in Full Viewer"))
@@ -4451,18 +4238,15 @@ Current state of the application:
         button_layout.addWidget(close_btn)
         
         layout.addLayout(button_layout)
-        dialog.show()  # Non-blocking show instead of exec_()
+        dialog.show()  
         
-        # Keep a reference to prevent garbage collection
         if not hasattr(self, '_open_dialogs'):
             self._open_dialogs = []
         self._open_dialogs.append(dialog)
         dialog.destroyed.connect(lambda: self._open_dialogs.remove(dialog) if dialog in self._open_dialogs else None)
 
     def _close_dialog_and_refocus(self, dialog):
-        """Close dialog and refocus on the chat history."""
         dialog.close()
-        # Re-render is now safer with ChatBrowser
         active_index = self.ai_chat_tabs.currentIndex()
         if active_index >= 0:
             self._rebuild_chat_display(active_index)
@@ -4484,16 +4268,12 @@ Current state of the application:
 
     def populate_grid(self, grid_layout, posts, widget_map, click_handler, is_local=False, viewport_width=1000):
         if SETTINGS.get("auto_scale_grid", False):
-            # By not adjusting the size of the grid host, the scroll area will correctly manage the width
-            # and prevent horizontal scrollbars from appearing.
             grid_layout.parentWidget().setFixedWidth(viewport_width)
             target_thumb_size = SETTINGS.get("thumbnail_size", 150)
-            spacing = grid_layout.spacing() # Usually 10
+            spacing = grid_layout.spacing() 
 
-            # Calculate how many columns can fit based on the target size
             cols = max(2, int((viewport_width + spacing) / (target_thumb_size + spacing)))
 
-            # Recalculate the actual thumbnail size to fill the width perfectly
             thumb_size = int((viewport_width - (cols - 1) * spacing) / cols)
         else:
             cols = SETTINGS.get("grid_columns", 5)
@@ -4508,13 +4288,10 @@ Current state of the application:
             thumb.customContextMenuRequested.connect(lambda pos, p=post: self.show_thumbnail_context_menu(p, pos))
             
             grid_layout.addWidget(thumb, row, col)
-            
-            # Robust ID handling to prevent KeyError
             post_id = post.get('id')
             if not post_id:
-                # Fallback to hash if available (common for local downloads)
                 post_id = post.get('hash') or f"post_{i}"
-                post['id'] = post_id # Update the post object so signals work
+                post['id'] = post_id 
                 
             widget_map[post_id] = thumb
 
@@ -4546,7 +4323,6 @@ Current state of the application:
 
     def on_thumbnail_loaded(self, pixmap, post):
         post_id = post.get('id')
-        # Check all possible widget maps
         widget = self.post_to_widget_map.get(post_id) or \
                  self.fav_post_to_widget_map.get(post_id) or \
                  self.reco_post_to_widget_map.get(post_id) or \
@@ -4574,14 +4350,8 @@ Current state of the application:
             return
 
     def show_thumbnail_context_menu(self, post, pos):
-        """
-        Creates and shows a context-aware right-click menu for a thumbnail.
-        The menu options change depending on the currently active tab.
-        """
         menu = QMenu()
         active_tab = self.tabs.currentWidget()
-
-        # --- Common Actions ---
         is_favorited = find_post_in_favorites(post.get('id'), self.favorites) is not None
         fav_text = _tr("Remove from Favorites") if is_favorited else _tr("Add to Favorites")
         fav_action = menu.addAction(qta.icon('fa5s.star', color='yellow' if is_favorited else None), fav_text)
@@ -4591,7 +4361,6 @@ Current state of the application:
         copy_tags_action = menu.addAction(qta.icon('fa5s.tags'), _tr("Copy Tags"))
         copy_image_url_action = menu.addAction(qta.icon('fa5s.link'), _tr("Copy Image URL"))
 
-        # --- Tab-Specific Actions ---
         if active_tab == self.browser_tab:
             menu.addSeparator()
             download_action = menu.addAction(qta.icon('fa5s.download'), _tr("Download"))
@@ -4612,14 +4381,10 @@ Current state of the application:
             menu.addSeparator()
             delete_from_disk_action = menu.addAction(qta.icon('fa5s.trash-alt', color='red'), _tr("Delete from Disk"))
 
-        # Execute the menu and handle the chosen action
         chosen_action = menu.exec_(QCursor.pos())
-
-        # --- Action Handlers ---
         if chosen_action is None:
             return
 
-        # Common actions
         if chosen_action == fav_action:
             self.toggle_favorite(post)
         elif chosen_action == open_in_browser_action:
@@ -4630,7 +4395,6 @@ Current state of the application:
         elif chosen_action == copy_image_url_action:
             QApplication.clipboard().setText(post.get("file_url", ""))
 
-        # Browser tab actions
         elif active_tab == self.browser_tab:
             if chosen_action == download_action:
                 from snekbooru.core.downloader import download_media
@@ -4639,7 +4403,6 @@ Current state of the application:
                 self.last_selected = post
                 self.reverse_search_selected()
 
-        # Favorites tab actions
         elif active_tab == self.favorites_tab:
             if chosen_action and chosen_action.parent() == move_to_category_menu:
                 target_category = chosen_action.data()
@@ -4650,14 +4413,12 @@ Current state of the application:
                     save_favorites(self.favorites)
                     self.refresh_favorites_grid()
 
-        # Downloads tab actions
         elif active_tab == self.downloads_tab:
             if chosen_action == open_in_viewer_action:
                 self.open_post_full(post)
             elif chosen_action == open_file_action:
                 file_path = post.get("local_path")
                 if file_path:
-                    # QDesktopServices is more cross-platform than os.startfile
                     from PyQt5.QtGui import QDesktopServices
                     from PyQt5.QtCore import QUrl
                     QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(file_path)))
@@ -4693,29 +4454,14 @@ Current state of the application:
         )
 
     def start_new_search(self):
-        """Initiates a new search, resetting the page to 0."""
         self.pid = 0
         self.search()
 
     def search(self):
-        """Fetches posts for the current tags and page number (pid)."""
         tags = self.search_input.text().strip()
         if self.include_pref.isChecked():
             pref_tags = SETTINGS.get("preferred_tags", "").split()
             tags = " ".join(pref_tags) + " " + tags
-
-        blacklisted_tags = SETTINGS.get("blacklisted_tags", "").split()
-        
-        if not SETTINGS.get("allow_loli_shota", False):
-            blacklisted_tags.extend(["loli", "shota"])
-        if not SETTINGS.get("allow_bestiality", False):
-            blacklisted_tags.append("bestiality")
-        if not SETTINGS.get("allow_guro", False):
-            blacklisted_tags.append("guro")
-
-        for tag in blacklisted_tags:
-            if tag:
-                tags += f" -{tag}"
 
         if not SETTINGS.get("allow_explicit", False) and "rating:" not in tags:
             tags += " rating:safe"
@@ -4747,8 +4493,6 @@ Current state of the application:
             return
 
         posts, total_count = data
-        
-        # Apply blacklist filtering (especially important for custom boorus that may not support API-level filtering)
         blacklisted_tags = SETTINGS.get("blacklisted_tags", "").split()
         if not SETTINGS.get("allow_loli_shota", False):
             blacklisted_tags.extend(["loli", "shota"])
@@ -4780,12 +4524,12 @@ Current state of the application:
 
     def next_page(self):
         self.pid += 1
-        self.search() # Use search() to paginate
+        self.search() 
 
     def prev_page(self):
         if self.pid > 0:
             self.pid -= 1
-            self.search() # Use search() to paginate
+            self.search() 
 
     def go_to_page(self):
         try:
@@ -4794,11 +4538,10 @@ Current state of the application:
                 self.pid = page - 1
                 self.search()
         except ValueError:
-            pass # Ignore invalid input
+            pass 
 
     def random_post(self):
         self.status.setText(_tr("Fetching random post..."))
-        # Use the current search tags for the random post, if any
         tags = self.search_input.text().strip()
         worker = ApiWorker(danbooru_random, tags)
         worker.signals.finished.connect(self.on_random_post_loaded)
@@ -4808,8 +4551,6 @@ Current state of the application:
         if err:
             self.status.setText(_tr("Error fetching random post."))
             return
-        
-        # Instead of opening, display it in the grid
         self.clear_grid(self.grid)
         self.post_to_widget_map.clear()
         self.selected_for_bulk.clear()
@@ -4822,38 +4563,29 @@ Current state of the application:
         self.status.setText(_tr("Loaded 1 random post."))
         self.page_input.setText("1")
         self.page_count_label.setText(_tr("Page 1 of 1"))
-        
-        # Also select it in the inspector
         self.on_thumbnail_clicked(post, self.post_to_widget_map.get(post['id']))
 
     def random_tag(self):
         self.status.setText(_tr("Fetching random tag..."))
-        worker = ApiWorker(danbooru_random, "") # Fetch a random post to get tags from
+        worker = ApiWorker(danbooru_random, "") 
         worker.signals.finished.connect(self.on_random_tag_loaded)
         self.threadpool.start(worker)
 
     def fetch_suggestions(self):
-        """Fetch tag suggestions based on current search input."""
         search_text = self.search_input.text().strip()
         if not search_text or len(search_text) < 2:
             return
-        
-        # Fetch suggestions in background
         worker = ApiWorker(suggest_all_tags, search_text, 20)
         worker.signals.finished.connect(self.on_suggestions_loaded)
         self.threadpool.start(worker)
 
     def on_suggestions_loaded(self, suggestions, err):
-        """Handle loaded tag suggestions."""
         if err or not suggestions:
             return
-        
-        # Update the completer with suggestions
         if isinstance(suggestions, list):
             self.search_completer_model.setStringList(suggestions)
 
     def suggest_tags_dialog(self):
-        """Open a dialog to suggest tags based on search."""
         text, ok = QInputDialog.getText(
             self, 
             _tr("Tag Suggestion"), 
@@ -4871,7 +4603,6 @@ Current state of the application:
         self.threadpool.start(worker)
 
     def on_suggest_tags_dialog_result(self, suggestions, err):
-        """Handle suggestion dialog result."""
         if err or not suggestions:
             self.status.setText(_tr("Error fetching tag suggestions."))
             return
@@ -4883,8 +4614,6 @@ Current state of the application:
         if not suggestions:
             self.status.setText(_tr("No tags matching your query."))
             return
-        
-        # Show selection dialog with suggestions
         from PyQt5.QtWidgets import QInputDialog
         items = [str(s) for s in suggestions]
         item, ok = QInputDialog.getItem(
@@ -4919,7 +4648,7 @@ Current state of the application:
         interesting_tags = [tag for tag in all_tags if tag not in BORING_TAGS and ":" not in tag]
 
         if not interesting_tags:
-            interesting_tags = all_tags # Fallback if all tags were boring
+            interesting_tags = all_tags 
 
         if interesting_tags:
             random_tag = random.choice(interesting_tags)
@@ -4949,8 +4678,6 @@ Current state of the application:
             posts_list = [post]
             current_index = 0
 
-        # Use the multiprocessing viewer to avoid blocking the main window
-        # and allow multiple viewers to be open at once.
         from snekbooru.ui.media_viewer import launch_media_viewer_process
         p = Process(target=launch_media_viewer_process, args=(posts_list, current_index, self.favorites, SETTINGS, self.media_viewer_queue, self.custom_themes))
         p.start()
@@ -4960,7 +4687,6 @@ Current state of the application:
         if self.last_selected: self.download_post(self.last_selected)
 
     def download_post(self, post):
-        """Handles downloading a single post, showing a message box on completion."""
         from snekbooru.core.downloader import download_media
         success, message = download_media(post, self)
         if success:
@@ -4979,18 +4705,13 @@ Current state of the application:
             self.toggle_favorite(self.last_selected)
 
     def _sanitize_post_for_storage(self, post):
-        """Creates a JSON-serializable copy of a post dictionary."""
-        # Create a shallow copy first
         clean_post = post.copy()
         
-        # Remove known non-serializable objects
         keys_to_remove = ["hh_object", "episode_obj", "pixmap", "movie"]
         for key in keys_to_remove:
             if key in clean_post:
                 del clean_post[key]
         
-        # Architecture check: Recursively ensure all values are serializable
-        # This is a bit expensive but safe. For now, we'll just handle known cases.
         return clean_post
 
     def toggle_favorite(self, post):
@@ -5006,7 +4727,6 @@ Current state of the application:
         save_favorites(self.favorites)
         self.update_inspector_fav_button(post)
         
-        # Update thumbnail style if visible
         widget = self.post_to_widget_map.get(post_id) or self.fav_post_to_widget_map.get(post_id)
         if widget:
             widget.update_style()
@@ -5028,7 +4748,7 @@ Current state of the application:
             return
 
         self.tabs.setCurrentWidget(self.browser_tab)
-        self.browser_content_tabs.setCurrentIndex(2) # Switch to reverse search tab
+        self.browser_content_tabs.setCurrentIndex(2) 
         self.reverse_search_url_input.setText(image_url)
         self._perform_reverse_search()
 
@@ -5056,16 +4776,15 @@ Current state of the application:
                     if self.is_cancelled: break
                     self.progress.emit(i + 1, total, _tr("Downloading Post #{id}...").format(id=post.get('id')))
                     try:
-                        download_media(post) # This function now handles all logic
+                        download_media(post) 
                         self.progress.emit(i + 1, total, _tr("Saved Post #{id}").format(id=post.get('id')))
                     except Exception as e:
                         self.progress.emit(i + 1, total, _tr("Failed Post #{id}: {error}").format(id=post.get('id'), error=e))
-                        time.sleep(0.1) # Avoid spamming UI
+                        time.sleep(0.1) 
                 self.finished.emit(_tr("Bulk download cancelled.") if self.is_cancelled else _tr("Bulk download complete."))
 
             def cancel(self): self.is_cancelled = True
 
-        # Get full post objects from the selected IDs
         posts_to_download = []
         for post_id in self.selected_for_bulk:
             if post := self.id_to_post_map.get(post_id):
@@ -5084,7 +4803,6 @@ Current state of the application:
         self.update_bulk_status()
 
     def deselect_all(self):
-        # Create a copy to iterate over as we are modifying the set
         for post_id in list(self.selected_for_bulk):
             if post_id in self.post_to_widget_map:
                 self.post_to_widget_map[post_id].set_selection(False)
@@ -5108,7 +4826,7 @@ Current state of the application:
     def add_to_search_history(self, text):
         if text and text not in self.search_history:
             self.search_history.insert(0, text)
-            self.search_history = self.search_history[:50] # Limit history size
+            self.search_history = self.search_history[:50] 
             self.search_completer_model.setStringList(self.search_history)
             save_search_history(self.search_history)
 
@@ -5170,17 +4888,15 @@ Current state of the application:
     def open_settings(self):
         self.custom_fonts_path = get_fonts_path()
         dialog = SettingsDialog(self, self.custom_fonts_path)
-        old_lang = SETTINGS.get("language") # Get language before changes
+        old_lang = SETTINGS.get("language")
 
         if dialog.exec_():
             new_settings = dialog.values()
             SETTINGS.update(new_settings)
             save_settings(SETTINGS)
-            self.reapply_settings(old_lang) # Pass old language to compare against new one
+            self.reapply_settings(old_lang)
 
     def reapply_settings(self, old_lang):
-        """Applies all user-configurable settings instantly."""
-        # Language change requires re-translating the entire UI
         if SETTINGS.get("language") != old_lang:
             self.retranslate_ui()
 
@@ -5191,17 +4907,14 @@ Current state of the application:
         self.apply_window_settings()
         self.apply_potato_mode()
 
-        # Clear and repopulate grids to reflect changes
         self.clear_grid(self.grid)
         self.clear_grid(self.fav_grid)
 
-        # Repopulate grids to reflect changes in column count or thumbnail size
-        self.on_posts_loaded((self.posts, 0), None) # Repopulate browser grid
+        self.on_posts_loaded((self.posts, 0), None)
         self.refresh_favorites_grid()
         self.refresh_downloads_grid()
 
     def refresh_visible_grid(self):
-        """Refreshes the grid of the currently visible tab."""
         current_tab = self.tabs.currentWidget()
         if current_tab == self.browser_tab:
             self.on_posts_loaded((self.posts, 0), None)
@@ -5209,15 +4922,12 @@ Current state of the application:
             self.refresh_favorites_grid()
 
     def retranslate_ui(self):
-        """Dynamically re-translates all static text in the UI."""
-        # Main Window
         self.title_bar.title_label.setText(_tr("Snekbooru (Incognito)") if self.is_incognito_window else _tr("Snekbooru"))
         self.limit.setSuffix(_tr(" posts"))
         self.limit.setToolTip(_tr("Number of posts to load per page."))
         self.source_title_label.setText(_tr("Source:"))
         self.settings_btn.setText(_tr(" Settings"))
 
-        # Tabs
         self.tabs.setTabText(self.tabs.indexOf(self.home_tab), _tr("Home"))
         self.tabs.setTabText(self.tabs.indexOf(self.browser_tab), _tr("Browser"))
         self.tabs.setTabText(self.tabs.indexOf(self.favorites_tab), _tr("Favorites"))
@@ -5226,14 +4936,12 @@ Current state of the application:
         self.tabs.setTabText(self.tabs.indexOf(self.minigames_tab), _tr("Minigames"))
         self.tabs.setTabText(self.tabs.indexOf(self.ai_tab), _tr("AI"))
 
-        # Home Tab
         self.home_title.setText(_tr("Welcome to Snekbooru"))
         self.home_subtitle.setText(_tr("Total posts available from supported sources:"))
         self.disclaimer_label.setText(_tr("(Note: Gelbooru & Danbooru totals are only accurate with an API key. Other counts are scraped.)"))
         self.home_refresh_btn.setText(_tr(" Refresh Stats"))
         self.credits_group.setTitle(_tr("Credits"))
 
-        # Browser Tab
         self.controls_group.setTitle(_tr("Search Controls"))
         self.search_input.setPlaceholderText(_tr("tags (e.g. rating:safe cat_girl)"))
         self.include_pref.setText(_tr("Include preferred tags"))
@@ -5244,7 +4952,7 @@ Current state of the application:
         self.insp_group.setTitle(_tr("Post Inspector"))
         self.open_full.setText(_tr(" Open Full Media"))
         self.quick_dl.setText(_tr(" Quick Download"))
-        self.inspector_fav_btn.setText(_tr(" Favorite")) # Will be updated by logic
+        self.inspector_fav_btn.setText(_tr(" Favorite")) 
         self.reverse_search_btn.setText(_tr("Reverse Search"))
         self.bulk_group.setTitle(_tr("Bulk Download"))
         self.bulk_dl_btn.setText(_tr(" Download Selected"))
@@ -5256,7 +4964,6 @@ Current state of the application:
         self.page_input.setToolTip(_tr("Go to page... (Press Enter)"))
         self.status.setText(_tr("Ready"))
 
-        # Favorites Tab
         self.fav_category_group.setTitle(_tr("Categories"))
         self.new_cat_btn.setText(_tr(" New"))
         self.rename_cat_btn.setText(_tr(" Rename"))
@@ -5266,7 +4973,6 @@ Current state of the application:
         self.fav_search_input.setPlaceholderText(_tr("Filter by tags..."))
         self.fav_insp_group.setTitle(_tr("Post Inspector"))
 
-        # Manga Tab
         self.manga_search_input.setPlaceholderText(_tr("manga or doujinshi title..."))
         self.manga_search_btn.setText(_tr(" Search"))
         self.manga_clear_search_btn.setText(_tr(" Clear"))
@@ -5278,12 +4984,10 @@ Current state of the application:
         self.manga_open_browser_btn.setText(_tr(" Open on Website"))
 
     def apply_potato_mode(self):
-        """Disables or enables features based on Potato Mode setting."""
         is_potato = SETTINGS.get("potato_mode", False)
         
-        # Disable expensive features
         self.suggest_btn.setVisible(not is_potato)
-        self.browser_content_tabs.setTabVisible(1, not is_potato) # Hide Recommendations tab
+        self.browser_content_tabs.setTabVisible(1, not is_potato) 
 
     def apply_theme(self):
         self.custom_themes = load_custom_themes()
@@ -5300,8 +5004,6 @@ Current state of the application:
 
         final_stylesheet = preprocess_stylesheet(scss_string)
         self.setStyleSheet(final_stylesheet)
-        
-        # Re-apply style to custom title bar buttons after theme change
         for btn in [self.title_bar.minimize_btn, self.title_bar.maximize_btn, self.title_bar.close_btn]:
             btn.style().unpolish(btn); btn.style().polish(btn)
         self.title_bar.update_icons()
@@ -5336,7 +5038,6 @@ Current state of the application:
             save_favorites(self.favorites)
             save_highscores(self.highscores)
 
-        # Clean up all temp files (manga pages, HLS cache, etc.)
         try:
             from snekbooru.core.temp_cache import purge_snekbooru_temp
             purge_snekbooru_temp()
@@ -5346,25 +5047,23 @@ Current state of the application:
         super().closeEvent(event)
     
     def apply_window_settings(self):
-        """Applies window size and mode from settings."""
         mode = SETTINGS.get("window_mode", "Windowed")
 
-        self.showNormal() # Exit fullscreen if active
+        self.showNormal() 
 
         if mode == _tr("Fullscreen"):
             self.title_bar.hide()
-            self.setWindowFlags(self.windowFlags() & ~Qt.FramelessWindowHint) # Use native fullscreen
+            self.setWindowFlags(self.windowFlags() & ~Qt.FramelessWindowHint) 
             self.showFullScreen()
-            return # Fullscreen handles its own size
+            return 
         elif mode == _tr("Windowed Borderless"):
             self.title_bar.hide()
             self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
             screen_rect = QApplication.desktop().screenGeometry()
-            self.setGeometry(screen_rect) # Set to max resolution
-        else: # "Windowed"
+            self.setGeometry(screen_rect) 
+        else:
             self.title_bar.show()
             self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
-            # Set window size from presets
             size_preset = SETTINGS.get("window_size_preset", "1600x900")
             if size_preset == _tr("Custom"):
                 width = SETTINGS.get("custom_window_width", 1820)
@@ -5373,8 +5072,8 @@ Current state of the application:
                 try:
                     width, height = map(int, size_preset.split(' ')[0].split('x'))
                 except ValueError:
-                    width, height = 1820, 1080 # Fallback
+                    width, height = 1820, 1080 
             self.resize(width, height)
             self.center_on_screen()
 
-        self.show() # Show the window after all settings are applied
+        self.show()

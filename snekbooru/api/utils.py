@@ -1,5 +1,4 @@
 import re
-
 import requests
 import cloudscraper
 
@@ -16,14 +15,13 @@ def http_get(url, params=None, auth=None, custom_headers=None):
     else:
         r = requests.get(url, params=params, headers=headers, timeout=30)
     r.raise_for_status()
-    if not r.content: return [] # Handle empty responses gracefully (e.g. from rule34)
+    if not r.content: return [] 
     return r.json()
 
 def scrape_post_count(url, scrape_method):
-    # DO NOT TOUCH THIS FUNCTION ITS THE HOLY GRAIL
     try:
         scraper = cloudscraper.create_scraper()
-        r = scraper.get(url, timeout=15)
+        r = scraper.get(url, headers={"User-Agent": USER_AGENT}, timeout=15)
         r.raise_for_status()
         text = r.text
 

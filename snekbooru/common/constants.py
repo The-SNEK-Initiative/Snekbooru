@@ -27,7 +27,7 @@ WAIFU_PICS_NSFW_CATEGORIES = [
     "waifu", "neko", "trap", "blowjob"
 ]
 
-USER_AGENT = "Snekbooru/6.1.0 Windows Stable Release (https://www.snekbooru.org)"
+USER_AGENT = "Snekbooru/6.0.1 Windows Stable Release (https://www.snekbooru.org)"
 EHENTAI_API = "https://api.e-hentai.org/api.php"
 DEFAULT_AI_MODEL = "nousresearch/hermes-3-llama-3.1-405b:free"
 

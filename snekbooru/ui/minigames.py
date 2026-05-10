@@ -1,3 +1,4 @@
+
 import random
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QPoint, QRectF, QPropertyAnimation, pyqtProperty, QPointF, QParallelAnimationGroup
 from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
@@ -13,7 +14,6 @@ from snekbooru.core.workers import ApiWorker, ImageWorker
 
 
 class BaseMinigame(QWidget):
-    """Base class for all minigames."""
     def __init__(self, parent_app):
         super().__init__()
         self.parent_app = parent_app
@@ -31,7 +31,6 @@ class BaseMinigame(QWidget):
 
 
 class PostShowdownGame(BaseMinigame):
-    """A game to guess which of two posts has a higher score."""
     def __init__(self, parent_app):
         super().__init__(parent_app)
         self.game_name = "post_showdown"
@@ -44,7 +43,6 @@ class PostShowdownGame(BaseMinigame):
         self.score_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.score_label)
 
-        # Container to constrain width and center the game
         game_container = QWidget()
         game_container.setMaximumWidth(600)
         container_layout = QHBoxLayout(game_container)
@@ -164,10 +162,8 @@ class PostShowdownGame(BaseMinigame):
 
 
 class PuzzlePieceItem(QGraphicsObject):
-    """A puzzle piece that is swapped via click selection."""
     dropped = pyqtSignal()
     
-    # Class variable to track selected piece
     selected_piece = None
 
     def __init__(self, pixmap, grid_size, piece_size, pieces_list=None, on_swap_callback=None):
@@ -178,52 +174,41 @@ class PuzzlePieceItem(QGraphicsObject):
         self.pieces_list = pieces_list
         self.on_swap_callback = on_swap_callback
         self.is_selected = False
-        self.animation = None  # Keep reference to prevent GC
+        self.animation = None  
         self.setAcceptHoverEvents(True)
 
-    # This is required for QPropertyAnimation to work on a QGraphicsObject's position
     @pyqtProperty(QPointF)
     def pos(self):
         return super().pos()
 
-    @pos.setter
     def pos(self, value):
         super().setPos(value)
 
     def boundingRect(self):
-        """Returns the bounding rectangle of the item."""
         return QRectF(self._pixmap.rect())
 
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget: QWidget):
-        """Paints the pixmap with selection highlight."""
         painter.drawPixmap(0, 0, self._pixmap)
         
-        # Draw selection border
         if self.is_selected:
             painter.setPen(QPen(QColor(255, 255, 0), 3))
             painter.drawRect(0, 0, self.piece_size, self.piece_size)
 
     def mousePressEvent(self, event):
-        """Click to select/swap."""
         if PuzzlePieceItem.selected_piece is None:
-            # First click: select this piece
             self.is_selected = True
             PuzzlePieceItem.selected_piece = self
             self.update()
         elif PuzzlePieceItem.selected_piece is self:
-            # Click same piece again: deselect
             self.is_selected = False
             PuzzlePieceItem.selected_piece = None
             self.update()
         else:
-            # Second click: swap with selected piece
             other = PuzzlePieceItem.selected_piece
             
-            # Deselect the first piece
             other.is_selected = False
             other.update()
             
-            # Perform the swap animation
             self._animate_swap(other)
             
             PuzzlePieceItem.selected_piece = None
@@ -231,32 +216,25 @@ class PuzzlePieceItem(QGraphicsObject):
         super().mousePressEvent(event)
 
     def _animate_swap(self, other_piece):
-        """Animate both pieces to their swapped positions."""
-        # Get current positions
         pos1 = self.pos
         pos2 = other_piece.pos
         
-        # Create animation group to keep both animations alive
         group = QParallelAnimationGroup()
         
-        # Animate this piece to other's position
         anim1 = QPropertyAnimation(self, b"pos")
         anim1.setDuration(300)
         anim1.setEndValue(pos2)
         group.addAnimation(anim1)
         
-        # Animate other piece to this position
         anim2 = QPropertyAnimation(other_piece, b"pos")
         anim2.setDuration(300)
         anim2.setEndValue(pos1)
         group.addAnimation(anim2)
         
-        # Store reference and start
         self.animation = group
         other_piece.animation = group
         group.start()
         
-        # Emit signal when done
         self.dropped.emit()
         
         if self.on_swap_callback:
@@ -264,17 +242,15 @@ class PuzzlePieceItem(QGraphicsObject):
 
 
 class ImageScrambleGame(BaseMinigame):
-    """A game to reassemble a scrambled image."""
     def __init__(self, parent_app):
         super().__init__(parent_app)
         self.post = None
         self.pieces = []
-        self.grid_size = 4  # 4x4 grid
+        self.grid_size = 4  
         self.piece_size = 128
 
         layout = QVBoxLayout(self)
 
-        # Controls
         controls_layout = QHBoxLayout()
         self.start_button = QPushButton(_tr("Load New Image"))
         self.start_button.clicked.connect(self.start_game)
@@ -292,7 +268,6 @@ class ImageScrambleGame(BaseMinigame):
         controls_layout.addWidget(self.status_label)
         layout.addLayout(controls_layout)
 
-        # Game Area
         self.scene = QGraphicsScene()
         self.view = QGraphicsView(self.scene)
         self.view.setRenderHint(QPainter.Antialiasing)
@@ -330,7 +305,6 @@ class ImageScrambleGame(BaseMinigame):
         self.status_label.setText(_tr("Puzzle loaded! Drag the pieces to solve it."))
 
     def setup_puzzle(self, pixmap):
-        # Explicitly delete old pieces to ensure no layering issues
         for piece in self.pieces:
             if piece.scene() is self.scene:
                 self.scene.removeItem(piece)
@@ -342,30 +316,26 @@ class ImageScrambleGame(BaseMinigame):
         total_size = self.piece_size * self.grid_size
         scaled_pixmap = pixmap.scaled(total_size, total_size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
 
-        # Crop to square
         crop_x = (scaled_pixmap.width() - total_size) / 2
         crop_y = (scaled_pixmap.height() - total_size) / 2
         cropped_pixmap = scaled_pixmap.copy(int(crop_x), int(crop_y), total_size, total_size)
 
-        # Draw grid lines on the background
         self.scene.setBackgroundBrush(QBrush(QColor(40, 40, 40)))
         pen = QPen(QColor(80, 80, 80))
         for i in range(self.grid_size + 1):
             self.scene.addLine(i * self.piece_size, 0, i * self.piece_size, total_size, pen)
             self.scene.addLine(0, i * self.piece_size, total_size, i * self.piece_size, pen)
 
-        # Create and add pieces
         piece_positions = []
         for y in range(self.grid_size):
             for x in range(self.grid_size):
                 piece_pixmap = cropped_pixmap.copy(x * self.piece_size, y * self.piece_size, self.piece_size, self.piece_size)
                 item = PuzzlePieceItem(piece_pixmap, self.grid_size, self.piece_size, self.pieces, self.check_solution)
-                item.setData(0, (x, y))  # Store original position
+                item.setData(0, (x, y))  
                 item.dropped.connect(self.check_solution)
                 self.pieces.append(item)
                 piece_positions.append(QPoint(x * self.piece_size, y * self.piece_size))
 
-        # Shuffle and place pieces
         random.shuffle(piece_positions)
         for i, item in enumerate(self.pieces):
             item.setPos(piece_positions[i])
@@ -374,15 +344,13 @@ class ImageScrambleGame(BaseMinigame):
         self.scene.setSceneRect(0, 0, total_size, total_size)
 
     def check_solution(self):
-        # This check might be called multiple times due to animations, so we add a small delay
         QTimer.singleShot(200, self._do_check_solution)
 
     def _do_check_solution(self):
-        if not self.pieces: return # Avoid checking if puzzle is not set up
+        if not self.pieces: return 
         correct_pieces = 0
         for item in self.pieces:
             original_x, original_y = item.data(0)
-            # Use int() to avoid floating point inaccuracies
             current_x = int(round(item.pos.x() / self.piece_size))
             current_y = int(round(item.pos.y() / self.piece_size))
 
@@ -399,13 +367,11 @@ class ImageScrambleGame(BaseMinigame):
     def on_puzzle_solved(self):
         self.status_label.setText(_tr("Congratulations! You solved the puzzle!"))
         QMessageBox.information(self, _tr("Puzzle Solved!"), _tr("You successfully reassembled the image!"))
-        # Disable dragging for all items
         for item in self.pieces:
             item.setFlag(QGraphicsItem.ItemIsMovable, False)
 
 
 class TagGuesserGame(BaseMinigame):
-    """A game to guess the fake tag for an image."""
     def __init__(self, parent_app):
         super().__init__(parent_app)
         self.game_name = "tag_guesser"
@@ -439,7 +405,6 @@ class TagGuesserGame(BaseMinigame):
         self.image_label.setText(_tr("Loading..."))
         self._clear_tag_buttons()
 
-        # Fetch a post with a good number of tags
         worker = ApiWorker(danbooru_random, "rating:safe")
         worker.signals.finished.connect(self.on_post_loaded)
         self.threadpool.start(worker)
@@ -458,22 +423,18 @@ class TagGuesserGame(BaseMinigame):
         self.post = post
         self._load_image(post)
 
-        # Get real tags and check if there are enough
         real_tags = [t for t in post.get('tags', '').split() if t not in BORING_TAGS and ":" not in t]
         if len(real_tags) < 5:
             self.result_label.setText(_tr("Post had too few tags, trying another..."))
-            QTimer.singleShot(500, self.start_round) # Try again after a short delay
+            QTimer.singleShot(500, self.start_round) 
             return
 
-        # Select 5 real tags and generate a fake one
         selected_real_tags = random.sample(real_tags, 5)
         self.fake_tag = self._generate_fake_tag(real_tags)
 
-        # Combine and shuffle
         all_choices = selected_real_tags + [self.fake_tag]
         random.shuffle(all_choices)
 
-        # Create buttons
         for i, tag in enumerate(all_choices):
             row, col = divmod(i, 3)
             button = QPushButton(tag.replace('_', ' '))
@@ -487,13 +448,11 @@ class TagGuesserGame(BaseMinigame):
         self.threadpool.start(worker)
 
     def on_tag_guesser_image_loaded(self, pixmap, post):
-        if post.get('id') != self.post.get('id'): return # Stale image
+        if post.get('id') != self.post.get('id'): return 
         if not pixmap.isNull():
             self.image_label.setPixmap(pixmap.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
     def _generate_fake_tag(self, existing_tags):
-        """Generates a plausible but non-existent tag."""
-        # Strategy 1: Combine parts of two different tags.
         attempts = 0
         while attempts < 10:
             attempts += 1
@@ -503,17 +462,13 @@ class TagGuesserGame(BaseMinigame):
                 parts2 = tag2.split('_')
 
                 if len(parts1) > 0 and len(parts2) > 0:
-                    # Combine first part of tag1 with last part of tag2
                     fake_tag = f"{parts1[0]}_{parts2[-1]}"
-                    # Ensure the generated tag is actually fake and not a simple duplicate
                     if fake_tag not in existing_tags and fake_tag != tag1 and fake_tag != tag2:
                         return fake_tag
             except (ValueError, IndexError):
-                continue # Not enough tags or tags are not splittable
+                continue 
 
-        # Strategy 2 (Fallback): Swap letters in a single tag.
-        # This ensures a fake tag is always generated even if combination fails.
-        for _ in range(10): # Try a few times to find a suitable tag
+        for _ in range(10): 
             base_tag = random.choice(existing_tags)
             if len(base_tag) > 4:
                 pos1, pos2 = random.sample(range(len(base_tag)), 2)
@@ -523,7 +478,7 @@ class TagGuesserGame(BaseMinigame):
                 if swapped_tag not in existing_tags:
                     return swapped_tag
         
-        return random.choice(existing_tags) + "_x" # Final fallback
+        return random.choice(existing_tags) + "_x" 
 
     def make_guess(self, guessed_tag):
         for button in self.tag_buttons:
@@ -542,4 +497,4 @@ class TagGuesserGame(BaseMinigame):
         QTimer.singleShot(2500, self.start_round)
 
     def update_score_label(self):
-        self.score_label.setText(_tr("Score: {score} | Highscore: {hs}").format(score=self.score, hs=self.get_highscore(self.game_name)))
+        self.score_label.setText(_tr("Score: {score} | Highscore: {hs}").format(score=self.score, hs=self.get_highscore(self.game_name)))

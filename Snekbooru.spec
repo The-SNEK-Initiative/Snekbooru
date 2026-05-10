@@ -10,7 +10,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['PyQt5.QtBluetooth', 'PyQt5.QtNfc', 'PyQt5.QtLocation', 'PyQt5.QtSensors', 'PyQt5.QtXmlPatterns', 'PyQt5.QtQml', 'PyQt5.QtQuick', 'PyQt5.QtTest', 'PyQt5.QtSql', 'tkinter', 'IPython', 'jedi'],
     noarchive=False,
     optimize=0,
 )

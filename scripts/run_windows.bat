@@ -1,3 +1,4 @@
+# Snekbooru Windows Run Script
 @echo off
 echo Starting Snekbooru...
 

@@ -1,4 +1,6 @@
 #!/bin/bash
+# Snekbooru Linux Build Script
+
 set -e
 
 echo "Building Snekbooru for Linux..."

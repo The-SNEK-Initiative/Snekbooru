@@ -1,5 +1,3 @@
-# Snekboorus entry point file
-
 import os
 import sys
 from multiprocessing import freeze_support
@@ -18,16 +16,12 @@ from snekbooru.ui.styling import load_custom_fonts
 
 
 def qt_message_handler(mode, context, message):
-    """
-    Custom message handler to suppress specific, harmless Qt warnings.
-    """
     if "OpenType support missing for" in message:
         return
     print(message, file=sys.stderr)
 
 
 def main():
-    """Main application entry point."""
     if hasattr(sys, '_MEIPASS'):
         os.environ['VLC_PLUGIN_PATH'] = os.path.join(sys._MEIPASS, 'vlc', 'plugins')
 

@@ -27,11 +27,6 @@ def _try_create_thumbnail(media_data, download_dir, file_hash):
 
 
 def download_media(post, parent_widget=None):
-    """
-    Downloads the media for a given post and saves metadata.
-    Converts GIFs to WebP for storage.
-    Returns a tuple (success, message).
-    """
     url = post.get("file_url")
     if not url:
         return False, _tr("No file URL available.")
@@ -40,7 +35,10 @@ def download_media(post, parent_widget=None):
         os.makedirs(download_dir, exist_ok=True)
 
         file_hash = get_file_hash(post)
-        original_ext = os.path.splitext(url.split('?')[0])[1] or f'.{post.get("file_ext", "jpg")}'
+        ext_part = os.path.splitext(url.split('?')[0])[1].lower()
+        original_ext = "".join(c for c in ext_part if c.isalnum() or c == '.')
+        if not original_ext:
+            original_ext = f'.{post.get("file_ext", "jpg")}'
         
         downloads_data = load_downloads_data()
         if file_hash in downloads_data and os.path.exists(downloads_data[file_hash].get("local_path", "")):

@@ -121,8 +121,6 @@ def resolve_manga_url(manga_obj, *, src=None, source_meta=None):
     if "e-hentai" in name:
         match = re.search(r"(\d{1,10})", s)
         if match:
-            # We favor e-hentai.org
-            # Note: e-hentai URLs usually need a token, but this is a best-effort fallback
             if "/" in s:
                 return f"https://e-hentai.org/g/{s.strip('/')}/"
             return f"https://e-hentai.org/g/{match.group(1)}/"
@@ -131,4 +129,3 @@ def resolve_manga_url(manga_obj, *, src=None, source_meta=None):
         return base.rstrip("/") + "/" + s.lstrip("/")
 
     return None
-

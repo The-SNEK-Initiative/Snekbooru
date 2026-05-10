@@ -1,3 +1,4 @@
+
 import re
 from typing import Optional
 from PyQt5.QtWebEngineWidgets import QWebEnginePage, QWebEngineSettings
@@ -11,18 +12,12 @@ from snekbooru.core.config import SETTINGS, find_post_in_favorites
 
 
 class HentaiWebPage(QWebEnginePage):
-    """
-    Custom WebEnginePage that enables JavaScript and disables Content Security Policy
-    to allow video players on sites like Hentai Haven to function correctly.
-    """
     def __init__(self, profile, parent=None):
         super().__init__(profile, parent)
         self.settings().setAttribute(QWebEngineSettings.JavascriptEnabled, True)
-        self.settings().setAttribute(QWebEngineSettings.CspEnabled, False)
 
 class ImageDropLabel(QLabel):
-    """A QLabel that accepts image drops."""
-    image_changed = pyqtSignal(QPixmap) # Signal that emits the new pixmap
+    image_changed = pyqtSignal(QPixmap)
 
     def __init__(self, text, parent=None):
         super().__init__(text, parent)
@@ -129,9 +124,9 @@ class AdBlocker(QWebEngineUrlRequestInterceptor):
             info.block(True)
 
 class ThumbnailWidget(QWidget):
-    clicked = pyqtSignal(object, QWidget) # post, self
-    doubleClicked = pyqtSignal(object) # post
-    selectionToggled = pyqtSignal(object, QWidget) # post, self
+    clicked = pyqtSignal(object, QWidget)
+    doubleClicked = pyqtSignal(object)
+    selectionToggled = pyqtSignal(object, QWidget)
 
     def __init__(self, post, size, favorites_dict, parent=None):
         super().__init__(parent)
@@ -217,10 +212,10 @@ class ThumbnailWidget(QWidget):
             else:
                 self.setStyleSheet("border: 1px solid #ccc; background: #dcdcdc;")
         elif self._is_gif():
-            border_color = "#ffc107" if is_fav else "#ffc107" # Yellow for GIFs
+            border_color = "#ffc107"
             self.setStyleSheet(f"border: 2px solid {border_color}; background: #1a1a1a;" if dark else f"border: 2px solid {border_color}; background: #f0f0f0;")
         elif self._is_video():
-            border_color = "#ffc107" if is_fav else "#5b5bff" # Yellow for fav, blue for video
+            border_color = "#ffc107" if is_fav else "#5b5bff"
             self.setStyleSheet(f"border: 2px solid {border_color}; background: #1a1a1a;" if dark else f"border: 2px solid {border_color}; background: #f0f0f0;")
         elif is_fav:
             self.setStyleSheet("border: 2px solid #ffc107; background: #1a1a1a;" if dark else "border: 2px solid #ffc107; background: #f0f0f0;")

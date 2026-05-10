@@ -1,3 +1,4 @@
+
 import os
 import re
 
@@ -6,7 +7,6 @@ from PyQt5.QtGui import QColor, QFont, QSyntaxHighlighter, QTextCharFormat, QPai
 from PyQt5.QtWidgets import QWidget, QPlainTextEdit, QCompleter, QTextEdit
 
 
-# --------------------------- Constants --------------------------- #
 SCSS_KEYWORDS = [
     'sWidget', 'sLabel', 'sPushButton', 'sLineEdit', 'sPlainTextEdit', 'sComboBox', 
     'sSpinBox', 'sCheckBox', 'sSlider', 'sProgressBar', 'sGroupBox', 'sListWidget', 
@@ -37,17 +37,13 @@ SCSS_PSEUDO = [
 ]
 
 
-# --------------------------- Theme Management --------------------------- #
 def get_themes_path():
-    """Returns the path to the custom themes directory.
-    Uses stable, version-independent path to ensure cross-version compatibility."""
     from snekbooru.core.config import get_app_data_dir
     path = os.path.join(get_app_data_dir(), "themes")
     os.makedirs(path, exist_ok=True)
     return path
 
 def load_custom_themes():
-    """Loads all .snek.css themes from the user's custom theme directory."""
     themes_dir = get_themes_path()
     themes = {}
     try:
@@ -55,22 +51,18 @@ def load_custom_themes():
             if filename.lower().endswith('.snek.css'):
                 theme_path = os.path.join(themes_dir, filename)
                 with open(theme_path, 'r', encoding='utf-8') as f:
-                    # Key is filename, value is content
                     themes[filename] = f.read()
     except Exception as e:
         print(f"Could not load custom themes: {e}")
     return themes
 
 def get_fonts_path():
-    """Returns the path to the custom fonts directory.
-    Uses stable, version-independent path to ensure cross-version compatibility."""
     from snekbooru.core.config import get_app_data_dir
     path = os.path.join(get_app_data_dir(), "fonts")
     os.makedirs(path, exist_ok=True)
     return path
 
 def load_custom_fonts():
-    """Loads all .ttf and .otf fonts from the user's custom font directory."""
     from PyQt5.QtGui import QFontDatabase
     fonts_dir = get_fonts_path()
     font_db = QFontDatabase()
@@ -90,16 +82,10 @@ def load_custom_fonts():
         print(f"Could not load custom fonts: {e}")
     return fonts_dir
 
-# --------------------------- sCSS Pre-processor --------------------------- #
+
 def preprocess_stylesheet(scss_string):
-    """
-    Translates the custom 'sCSS' syntax (e.g., sPushButton) into standard Qt CSS.
-    This allows the user to work with a fully branded styling system.
-    """
-    # 1. Process class selectors: .my-class -> [class~="my-class"]
     processed_style = re.sub(r'(?<![a-zA-Z0-9/])\.([a-zA-Z_][a-zA-Z0-9_-]*)', r'[class~="\1"]', scss_string)
 
-    # 2. Process s-widget type selectors: sPushButton -> QPushButton
     replacements = {
         'sCheckBox': 'QCheckBox', 'sComboBox': 'QComboBox', 'sDialog': 'QDialog',
         'sFrame': 'QFrame', 'sGroupBox': 'QGroupBox', 'sHeaderView': 'QHeaderView',
@@ -117,7 +103,7 @@ def preprocess_stylesheet(scss_string):
         
     return processed_style
 
-# --------------------------- Code Editor --------------------------- #
+
 class LineNumberArea(QWidget):
     def __init__(self, editor):
         super().__init__(editor)
@@ -139,12 +125,10 @@ class CodeEditor(QPlainTextEdit):
         self.updateLineNumberAreaWidth(0)
         self.highlightCurrentLine()
         
-        # Font
         font = QFont("Consolas", 11)
         font.setStyleHint(QFont.Monospace)
         self.setFont(font)
         
-        # Completer
         self.completer = None
 
     def lineNumberAreaWidth(self):
@@ -248,7 +232,6 @@ class CodeEditor(QPlainTextEdit):
                 e.ignore()
                 return
 
-        # Auto-indentation
         if e.key() in (Qt.Key_Return, Qt.Key_Enter):
             cursor = self.textCursor()
             block = cursor.block()
@@ -266,7 +249,6 @@ class CodeEditor(QPlainTextEdit):
             self.insertPlainText(indentation)
             return
             
-        # Auto-close brackets
         if e.key() == Qt.Key_BraceLeft:
             super().keyPressEvent(e)
             self.insertPlainText("}")
@@ -297,13 +279,12 @@ class CodeEditor(QPlainTextEdit):
         cr.setWidth(self.completer.popup().sizeHintForColumn(0) + self.completer.popup().verticalScrollBar().sizeHint().width())
         self.completer.complete(cr)
 
-# --------------------------- Syntax Highlighter --------------------------- #
+
 class sCSSHighlighter(QSyntaxHighlighter):
     def __init__(self, parent):
         super().__init__(parent)
         self.highlighting_rules = []
 
-        # Keywords (s-widgets)
         keyword_format = QTextCharFormat()
         keyword_format.setForeground(QColor("#569CD6")); keyword_format.setFontWeight(QFont.Bold)
         for word in SCSS_KEYWORDS: 
@@ -312,30 +293,24 @@ class sCSSHighlighter(QSyntaxHighlighter):
                 pattern = re.escape(word)
             self.highlighting_rules.append((re.compile(pattern), keyword_format))
 
-        # Properties
         property_format = QTextCharFormat(); property_format.setForeground(QColor("#9CDCFE"))
         for word in SCSS_PROPERTIES: self.highlighting_rules.append((re.compile(r'\b' + re.escape(word) + r'(?=\s*:)'), property_format))
 
-        # Pseudo-states
         pseudo_format = QTextCharFormat(); pseudo_format.setForeground(QColor("#C586C0"))
         for word in SCSS_PSEUDO: self.highlighting_rules.append((re.compile(re.escape(word)), pseudo_format))
 
-        # Values (numbers, hex colors)
         value_format = QTextCharFormat(); value_format.setForeground(QColor("#D7BA7D"))
         self.highlighting_rules.append((re.compile(r'#[0-9a-fA-F]{3,8}\b'), value_format))
         self.highlighting_rules.append((re.compile(r'\b\d+(px|pt|em)?\b'), value_format))
 
-        # Strings (in quotes)
         string_format = QTextCharFormat(); string_format.setForeground(QColor("#CE9178"))
         self.highlighting_rules.append((re.compile(r'"[^"\\]*(\\.[^"\\]*)*"'), string_format))
         self.highlighting_rules.append((re.compile(r"'[^'\\]*(\\.[^'\\]*)*'"), string_format))
 
-        # Object Names (#id) and Pseudo-states (:hover)
         selector_format = QTextCharFormat(); selector_format.setForeground(QColor("#C586C0"))
         self.highlighting_rules.append((re.compile(r'#[A-Za-z0-9_-]+'), selector_format))
         self.highlighting_rules.append((re.compile(r'::?[a-zA-Z-]+'), selector_format))
 
-        # Comments
         self.comment_format = QTextCharFormat(); self.comment_format.setForeground(QColor("#6A9955"))
         self.comment_start_expression = re.compile(r'/\*'); self.comment_end_expression = re.compile(r'\*/')
 
@@ -357,70 +332,69 @@ class sCSSHighlighter(QSyntaxHighlighter):
             match = self.comment_start_expression.search(text, start_index + comment_length)
             start_index = match.start() if match else -1
 
-# --------------------------- Themes --------------------------- #
 
 PYGMENTS_CSS = """
 .codehilite .hll { background-color: #49483e }
 .codehilite  { background: #272822; color: #f8f8f2; border-radius: 4px; padding: 10px; }
-.codehilite .c { color: #75715e } /* Comment */
-.codehilite .err { color: #960050; background-color: #1e0010 } /* Error */
-.codehilite .k { color: #66d9ef } /* Keyword */
-.codehilite .l { color: #ae81ff } /* Literal */
-.codehilite .n { color: #f8f8f2 } /* Name */
-.codehilite .o { color: #f92672 } /* Operator */
-.codehilite .p { color: #f8f8f2 } /* Punctuation */
-.codehilite .ch { color: #75715e } /* Comment.Hashbang */
-.codehilite .cm { color: #75715e } /* Comment.Multiline */
-.codehilite .cp { color: #75715e } /* Comment.Preproc */
-.codehilite .cpf { color: #75715e } /* Comment.PreprocFile */
-.codehilite .c1 { color: #75715e } /* Comment.Single */
-.codehilite .cs { color: #75715e } /* Comment.Special */
-.codehilite .kc { color: #66d9ef } /* Keyword.Constant */
-.codehilite .kd { color: #66d9ef } /* Keyword.Declaration */
-.code.hilite .kn { color: #f92672 } /* Keyword.Namespace */
-.codehilite .kp { color: #66d9ef } /* Keyword.Pseudo */
-.codehilite .kr { color: #66d9ef } /* Keyword.Reserved */
-.codehilite .kt { color: #66d9ef } /* Keyword.Type */
-.codehilite .ld { color: #e6db74 } /* Literal.Date */
-.codehilite .m { color: #ae81ff } /* Literal.Number */
-.codehilite .s { color: #e6db74 } /* Literal.String */
-.codehilite .na { color: #a6e22e } /* Name.Attribute */
-.codehilite .nb { color: #f8f8f2 } /* Name.Builtin */
-.codehilite .nc { color: #a6e22e } /* Name.Class */
-.codehilite .no { color: #66d9ef } /* Name.Constant */
-.codehilite .nd { color: #a6e22e } /* Name.Decorator */
-.codehilite .ni { color: #f8f8f2 } /* Name.Entity */
-.codehilite .ne { color: #a6e22e } /* Name.Exception */
-.codehilite .nf { color: #a6e22e } /* Name.Function */
-.codehilite .nl { color: #f8f8f2 } /* Name.Label */
-.codehilite .nn { color: #f8f8f2 } /* Name.Namespace */
-.codehilite .nt { color: #f92672 } /* Name.Tag */
-.codehilite .nv { color: #f8f8f2 } /* Name.Variable */
-.codehilite .ow { color: #f92672 } /* Operator.Word */
-.codehilite .w { color: #f8f8f2 } /* Text.Whitespace */
-.codehilite .mb { color: #ae81ff } /* Literal.Number.Bin */
-.codehilite .mf { color: #ae81ff } /* Literal.Number.Float */
-.codehilite .mh { color: #ae81ff } /* Literal.Number.Hex */
-.codehilite .mi { color: #ae81ff } /* Literal.Number.Integer */
-.codehilite .mo { color: #ae81ff } /* Literal.Number.Oct */
-.codehilite .sa { color: #e6db74 } /* Literal.String.Affix */
-.codehilite .sb { color: #e6db74 } /* Literal.String.Backtick */
-.codehilite .sc { color: #e6db74 } /* Literal.String.Char */
-.codehilite .dl { color: #e6db74 } /* Literal.String.Delimiter */
-.codehilite .sd { color: #e6db74 } /* Literal.String.Doc */
-.codehilite .s2 { color: #e6db74 } /* Literal.String.Double */
-.codehilite .se { color: #ae81ff } /* Literal.String.Escape */
-.codehilite .sh { color: #e6db74 } /* Literal.String.Heredoc */
-.codehilite .si { color: #e6db74 } /* Literal.String.Interpol */
-.codehilite .sx { color: #e6db74 } /* Literal.String.Other */
-.codehilite .sr { color: #e6db74 } /* Literal.String.Regex */
-.codehilite .s1 { color: #e6db74 } /* Literal.String.Single */
-.codehilite .ss { color: #e6db74 } /* Literal.String.Symbol */
-.codehilite .bp { color: #f8f8f2 } /* Name.Builtin.Pseudo */
-.codehilite .vc { color: #f8f8f2 } /* Name.Variable.Class */
-.codehilite .vg { color: #f8f8f2 } /* Name.Variable.Global */
-.codehilite .vi { color: #f8f8f2 } /* Name.Variable.Instance */
-.codehilite .il { color: #ae81ff } /* Literal.Number.Integer.Long */
+.codehilite .c { color: #75715e }
+.codehilite .err { color: #960050; background-color: #1e0010 }
+.codehilite .k { color: #66d9ef }
+.codehilite .l { color: #ae81ff }
+.codehilite .n { color: #f8f8f2 }
+.codehilite .o { color: #f92672 }
+.codehilite .p { color: #f8f8f2 }
+.codehilite .ch { color: #75715e }
+.codehilite .cm { color: #75715e }
+.codehilite .cp { color: #75715e }
+.codehilite .cpf { color: #75715e }
+.codehilite .c1 { color: #75715e }
+.codehilite .cs { color: #75715e }
+.codehilite .kc { color: #66d9ef }
+.codehilite .kd { color: #66d9ef }
+.codehilite .kn { color: #f92672 }
+.codehilite .kp { color: #66d9ef }
+.codehilite .kr { color: #66d9ef }
+.codehilite .kt { color: #66d9ef }
+.codehilite .ld { color: #e6db74 }
+.codehilite .m { color: #ae81ff }
+.codehilite .s { color: #e6db74 }
+.codehilite .na { color: #a6e22e }
+.codehilite .nb { color: #f8f8f2 }
+.codehilite .nc { color: #a6e22e }
+.codehilite .no { color: #66d9ef }
+.codehilite .nd { color: #a6e22e }
+.codehilite .ni { color: #f8f8f2 }
+.codehilite .ne { color: #a6e22e }
+.codehilite .nf { color: #a6e22e }
+.codehilite .nl { color: #f8f8f2 }
+.codehilite .nn { color: #f8f8f2 }
+.codehilite .nt { color: #f92672 }
+.codehilite .nv { color: #f8f8f2 }
+.codehilite .ow { color: #f92672 }
+.codehilite .w { color: #f8f8f2 }
+.codehilite .mb { color: #ae81ff }
+.codehilite .mf { color: #ae81ff }
+.codehilite .mh { color: #ae81ff }
+.codehilite .mi { color: #ae81ff }
+.codehilite .mo { color: #ae81ff }
+.codehilite .sa { color: #e6db74 }
+.codehilite .sb { color: #e6db74 }
+.codehilite .sc { color: #e6db74 }
+.codehilite .dl { color: #e6db74 }
+.codehilite .sd { color: #e6db74 }
+.codehilite .s2 { color: #e6db74 }
+.codehilite .se { color: #ae81ff }
+.codehilite .sh { color: #e6db74 }
+.codehilite .si { color: #e6db74 }
+.codehilite .sx { color: #e6db74 }
+.codehilite .sr { color: #e6db74 }
+.codehilite .s1 { color: #e6db74 }
+.codehilite .ss { color: #e6db74 }
+.codehilite .bp { color: #f8f8f2 }
+.codehilite .vc { color: #f8f8f2 }
+.codehilite .vg { color: #f8f8f2 }
+.codehilite .vi { color: #f8f8f2 }
+.codehilite .il { color: #ae81ff }
 """
 
 DARK_STYLESHEET = """
@@ -455,7 +429,7 @@ sPushButton:hover {
 }
 sPushButton:pressed { 
     background: #3a3a3a; 
-}
+    }
 sPushButton:disabled {
     background: #1a1a1a;
     color: #666;
@@ -576,7 +550,7 @@ sWidget {
 sWidget#custom_title_bar {
     background-color: #e0e0e0;
 }
-/* --- Custom ScrollBar --- */
+
 sScrollBar:vertical {
     border: none;
     background: transparent;
@@ -747,24 +721,22 @@ INCOGNITO_STYLESHEET = """
     font-family: 'Segoe UI', Arial, sans-serif;
 }
 sWidget { 
-    background-color: #1a1a2e; /* base_bg */
-    color: #e0e0ff; /* text_color */
+    background-color: #1a1a2e; 
+    color: #e0e0ff; 
     border: none;
 }
 
-/* --- Inputs & Lists --- */
 sLineEdit, sPlainTextEdit, sListWidget, sComboBox, sSpinBox {
-    background: #24243e; /* ui_bg */
+    background: #24243e; 
     color: #e0e0ff; 
-    border: 1px solid #4a4a6a; /* border_color */
+    border: 1px solid #4a4a6a; 
     border-radius: 4px; 
     padding: 6px; 
     selection-background-color: #4a4a6a;
 }
 
-/* --- Buttons --- */
 sPushButton { 
-    background: #2e2e4f; /* hover_bg */
+    background: #2e2e4f; 
     color: #e0e0ff; 
     border: 1px solid #4a4a6a; 
     border-radius: 4px; 
@@ -772,7 +744,7 @@ sPushButton {
     min-height: 30px;
 }
 sPushButton:hover { 
-    background: #3a3a5f; /* pressed_bg */
+    background: #3a3a5f; 
     border-color: #5a5a7a;
 }
 sPushButton:pressed { 
@@ -783,7 +755,6 @@ sPushButton:disabled {
     color: #80809f;
 }
 
-/* --- Containers & Layout --- */
 sGroupBox {
     font-weight: bold;
     border: 1px solid #4a4a6a;
@@ -801,10 +772,9 @@ sSplitter::handle {
     background: #2e2e4f;
 }
 sSplitter::handle:hover {
-    background: #9a70ff; /* accent */
+    background: #9a70ff; 
 }
 
-/* --- Tabs --- */
 sTabWidget::pane {
     border: 1px solid #4a4a6a;
     border-radius: 4px;
@@ -814,7 +784,7 @@ sTabWidget::tab-bar {
 }
 sTabBar::tab {
     background: #24243e;
-    color: #a0a0cf; /* subtle_text */
+    color: #a0a0cf; 
     padding: 8px 16px;
     border-top-left-radius: 4px;
     border-top-right-radius: 4px;
@@ -827,10 +797,9 @@ sTabBar::tab:hover {
 sTabBar::tab:selected {
     background: #2e2e4f;
     color: #fff;
-    border-bottom: 2px solid #9a70ff; /* accent */
+    border-bottom: 2px solid #9a70ff; 
 }
 
-/* --- Other Widgets --- */
 sProgressBar {
     border: 1px solid #4a4a6a;
     border-radius: 4px;
@@ -839,7 +808,7 @@ sProgressBar {
     color: #e0e0ff;
 }
 sProgressBar::chunk {
-    background: #9a70ff; /* accent */
+    background: #9a70ff; 
     border-radius: 3px;
 }
 sMenu {
@@ -850,7 +819,6 @@ sMenu::item:selected {
     background-color: #3a3a5f;
 }
 
-/* --- Title Bar --- */
 sWidget#main_window_title_bar, sWidget#dialog_title_bar {
     background-color: #2e2e4f;
 }
@@ -863,10 +831,8 @@ sToolButton#close_button:hover {
 """
 
 EXAMPLE_STYLESHEET = """
-/* Snekbooru Example Theme: "Vaporwave Sunset" */
-
 * { 
-    font-family: 'Comic Sans MS', 'Impact', sans-serif; /* Example font */
+    font-family: 'Comic Sans MS', 'Impact', sans-serif; 
     font-size: 15px; 
 }
 sWidget { 
@@ -875,7 +841,6 @@ sWidget {
 }
 sLineEdit, sPlainTextEdit, sListWidget, sComboBox, sSpinBox, sTableView { 
     background-color: #261447;
-    /* background-image: url("path/to/your/image.png");  Example background image */
     color: #f0f0f0; 
     border: 1px solid #ff79c6; 
     border-radius: 0px; 
@@ -904,7 +869,6 @@ sGroupBox::title {
 }
 
 
-/* Tab Styling */
 sTabWidget::pane {
     border: 1px solid #ff79c6;
     border-top: 0px;

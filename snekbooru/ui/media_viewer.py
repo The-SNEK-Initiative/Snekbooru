@@ -1,3 +1,4 @@
+
 import os
 import sys
 
@@ -20,11 +21,8 @@ def launch_media_viewer_process(posts, current_index, favorites, settings, queue
     global SETTINGS
     SETTINGS.update(settings)
 
-    # We need to import MediaViewerDialog here, inside the function,
-    # to avoid circular dependencies at the top level.
     from snekbooru.ui.main_window import MediaViewerDialog
 
-    # The MediaViewerDialog needs a mock parent to get the stylesheet and favorites.
     class MockParent:
         def __init__(self):
             self.favorites = favorites
@@ -43,7 +41,7 @@ def launch_media_viewer_process(posts, current_index, favorites, settings, queue
     else: scss_string = DARK_STYLESHEET
     final_stylesheet = preprocess_stylesheet(scss_string)
     app.setStyleSheet(final_stylesheet)
-    w.setStyleSheet(final_stylesheet) # Apply to dialog as well
+    w.setStyleSheet(final_stylesheet) 
 
     w.show()
     sys.exit(app.exec_())

@@ -4,7 +4,7 @@ import cloudscraper
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Union
-from urllib.parse import urljoin
+from urllib.parse import urljoin, quote_plus
 
 from enma.application.core.interfaces.manga_repository import IMangaRepository
 from enma.domain.entities.manga import (MIME, Chapter, Genre, Author, Image, Manga, SymbolicLink,
@@ -23,18 +23,15 @@ class EHentaiRepo(IMangaRepository):
         pass
 
     def get(self, identifier: str, with_symbolic_links: bool = False, **kwargs) -> Union[Manga, None]:
-        # Identifier can be "gid/token"
         if "/" in identifier:
             gid, token = identifier.split("/")[:2]
         else:
-            # Fallback if only gid is provided (this might fail if token is needed)
             gid = identifier
             token = kwargs.get("token", "")
 
         try:
             meta = fetch_gallery_metadata(int(gid), token, http_client=self._scraper)
             
-            # Convert tags
             tags = []
             genres = []
             authors = []
@@ -48,7 +45,6 @@ class EHentaiRepo(IMangaRepository):
                 else:
                     genres.append(Genre(id=t, name=t))
 
-            # Create Manga object
             manga = Manga(
                 title=Title(
                     english=meta.get("title"),
@@ -60,7 +56,7 @@ class EHentaiRepo(IMangaRepository):
                 updated_at=datetime.fromtimestamp(int(meta.get("posted")), tz=timezone.utc),
                 status='completed',
                 url=f"https://e-hentai.org/g/{meta.get('gid')}/{meta.get('token')}/",
-                language=None, # Extract from tags if needed
+                language=None,
                 authors=authors,
                 genres=genres,
                 thumbnail=Image(uri=meta.get("thumb"), mime=MIME.J, width=250, height=350),
@@ -74,20 +70,17 @@ class EHentaiRepo(IMangaRepository):
             return None
 
     def search(self, query: str, page: int, **kwargs) -> SearchResult:
-        search_url = f"{self._base_url}?f_search={query}&page={page-1}"
+        encoded_query = quote_plus(query)
+        search_url = f"{self._base_url}?f_search={encoded_query}&page={page-1}"
         r = self._scraper.get(search_url, headers={"User-Agent": USER_AGENT})
         r.raise_for_status()
         
         soup = BeautifulSoup(r.text, 'html.parser')
         
-        # Parse galleries
-        # E-Hentai has different layouts, usually 'itg' table or 'gl1t' divs
         results = []
         
-        # Try table layout (Extended or Thumbnail)
         items = soup.select("table.itg tr")
         if not items:
-             # Try grid layout
              items = soup.select("div.gl1t")
 
         gids_tokens = []
@@ -97,9 +90,6 @@ class EHentaiRepo(IMangaRepository):
                 url = link['href']
                 gid, token = parse_gallery_id_token(url)
                 if gid and token:
-                    # We'll use a Thumb object for now, and maybe fetch metadata later if needed
-                    # But for search results, we usually want title and thumb immediately.
-                    
                     title = ""
                     title_elem = item.select_one(".glink") or item.select_one(".gl3t")
                     if title_elem: title = title_elem.get_text(strip=True)
@@ -118,11 +108,10 @@ class EHentaiRepo(IMangaRepository):
                         title=title
                     ))
 
-        # Find total pages
         total_pages = 1
         ptb = soup.select_one("table.ptt")
         if ptb:
-            last_page_elem = ptb.select("td")[-2] # Last one is '>', second to last is page number
+            last_page_elem = ptb.select("td")[-2]
             if last_page_elem:
                 try:
                     total_pages = int(last_page_elem.get_text(strip=True))
@@ -133,7 +122,7 @@ class EHentaiRepo(IMangaRepository):
             query=query,
             total_pages=total_pages,
             page=page,
-            total_results=len(results) * total_pages, # Approximation
+            total_results=len(results) * total_pages,
             results=results
         )
 
@@ -146,7 +135,6 @@ class EHentaiRepo(IMangaRepository):
         )
 
     def random(self) -> Manga:
-        # Not easily implemented for e-hentai without scraping
         raise NotImplementedError("Random not implemented for e-hentai")
 
     def author_page(self, author: str, page: int) -> Any:

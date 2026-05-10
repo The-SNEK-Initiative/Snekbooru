@@ -15,10 +15,6 @@ _DIRECT_IMAGE_RE = re.compile(r'<img id="img" src="([^"]+)"')
 
 
 def parse_gallery_id_token(url):
-    """
-    Parses e-hentai gallery URL to extract (gid, token).
-    Example: https://e-hentai.org/g/2231376/a7584a5932/
-    """
     if not isinstance(url, str):
         return None, None
     m = _GALLERY_ID_TOKEN_RE.search(url)
@@ -28,9 +24,6 @@ def parse_gallery_id_token(url):
 
 
 def fetch_gallery_metadata(gid, token, http_client=None):
-    """
-    Fetches metadata for a single gallery from e-hentai API.
-    """
     payload = {
         "method": "gdata",
         "gidlist": [[gid, token]],
@@ -59,10 +52,6 @@ def fetch_gallery_metadata(gid, token, http_client=None):
 
 
 def _extract_image_url_from_page(page_html):
-    """
-    Extracts the direct image URL from an e-hentai image page.
-    The image is in: <img id="img" src="...">
-    """
     match = _DIRECT_IMAGE_RE.search(page_html)
     if match:
         return match.group(1)
@@ -70,10 +59,6 @@ def _extract_image_url_from_page(page_html):
 
 
 def download_gallery_pages(gallery_url, output_dir, http_client=None, progress_cb=None):
-    """
-    Downloads all pages of an e-hentai gallery by scraping image URLs from the website.
-    Similar to nhentai scraping approach.
-    """
     gid, token = parse_gallery_id_token(gallery_url)
     if not gid:
         raise ValueError("Invalid e-hentai gallery URL. Must be in format: https://e-hentai.org/g/{gid}/{token}/")
@@ -83,7 +68,6 @@ def download_gallery_pages(gallery_url, output_dir, http_client=None, progress_c
     else:
         scraper = http_client
     
-    # 1. Fetch gallery page to get metadata and extract title/page count
     r = scraper.get(gallery_url, headers={"User-Agent": USER_AGENT}, timeout=30)
     r.raise_for_status()
     html = r.text
@@ -94,23 +78,19 @@ def download_gallery_pages(gallery_url, output_dir, http_client=None, progress_c
     count_match = _FILE_COUNT_RE.search(html)
     file_count = int(count_match.group(1)) if count_match else 0
     
-    # Ensure directory exists before downloading
     try:
         os.makedirs(output_dir, exist_ok=True)
     except Exception as e:
         raise RuntimeError(f"Could not create output directory {output_dir}: {e}")
 
-    # 2. Parse the HTML to extract all image page URLs
     soup = BeautifulSoup(html, 'html.parser')
     image_page_urls = []
     
-    # Find all links to image pages (format: https://e-hentai.org/s/{key}/{gid}-{page})
     for link in soup.find_all('a', href=re.compile(r'/s/[a-z0-9]+/\d+-\d+')):
         href = link.get('href')
         if href and href not in image_page_urls:
             image_page_urls.append(href)
     
-    # Fetch subsequent gallery pages if needed (for galleries with more than ~40 images per page)
     page_idx = 1
     while file_count > 0 and len(image_page_urls) < file_count:
         gurl = f"{gallery_url.rstrip('/')}/?p={page_idx}"
@@ -130,11 +110,10 @@ def download_gallery_pages(gallery_url, output_dir, http_client=None, progress_c
                 break
                 
             page_idx += 1
-            time.sleep(0.5)  # Reduced delay for scraping
+            time.sleep(0.5)  
         except Exception as e:
             break
 
-    # 3. Download each image
     downloaded_paths = []
     total_to_download = len(image_page_urls)
 
@@ -143,16 +122,13 @@ def download_gallery_pages(gallery_url, output_dir, http_client=None, progress_c
             progress_cb(i, total_to_download)
             
         try:
-            # Fetch the image page
             r = scraper.get(img_page_url, headers={"User-Agent": USER_AGENT}, timeout=30)
             r.raise_for_status()
             
-            # Extract the direct image URL
             img_url = _extract_image_url_from_page(r.text)
             if not img_url:
                 continue
             
-            # Determine file extension from URL
             ext = ".jpg"
             if "." in img_url:
                 potential_ext = os.path.splitext(img_url.split("?")[0])[1].lower()
@@ -161,7 +137,6 @@ def download_gallery_pages(gallery_url, output_dir, http_client=None, progress_c
             
             file_path = os.path.join(output_dir, f"page_{i:04d}{ext}")
             
-            # Download the actual image
             ir = scraper.get(img_url, headers={"User-Agent": USER_AGENT, "Referer": img_page_url}, timeout=60)
             ir.raise_for_status()
             

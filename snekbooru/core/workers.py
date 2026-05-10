@@ -12,18 +12,15 @@ from snekbooru.core.config import SETTINGS
 
 
 class WorkerSignals(QObject):
-    """Defines the signals available from a running worker thread."""
     finished = pyqtSignal(object, str)
     progress = pyqtSignal(int, int, str)
 
 class AIWorkerSignals(QObject):
-    """Defines signals for the AI streaming worker."""
     finished = pyqtSignal(str)
     chunk = pyqtSignal(str)
     error = pyqtSignal(str)
 
 class ApiWorker(QRunnable):
-    """Generic worker for running an API function in the background."""
     def __init__(self, fn, *args, **kwargs):
         super().__init__()
         self.fn = fn
@@ -34,15 +31,12 @@ class ApiWorker(QRunnable):
     @pyqtSlot()
     def run(self):
         try:
-            # Pass both positional and keyword arguments to the target function
-            # This is more flexible and robust.
             data = self.fn(*self.args, **self.kwargs) 
             self.signals.finished.emit(data, "")
         except Exception as e:
             self.signals.finished.emit(None, str(e))
 
 class AsyncApiWorker(QRunnable):
-    """Generic worker for running an async API function in the background."""
     def __init__(self, coro, *args, **kwargs):
         super().__init__()
         self.coro = coro
@@ -53,8 +47,6 @@ class AsyncApiWorker(QRunnable):
     @pyqtSlot()
     def run(self):
         try:
-            # asyncio.run() creates a new event loop, which is suitable for use in a thread.
-            # This allows running async code from a synchronous QRunnable.
             data = asyncio.run(self.coro(*self.args, **self.kwargs))
             self.signals.finished.emit(data, "")
         except Exception as e:
@@ -63,7 +55,6 @@ class AsyncApiWorker(QRunnable):
             self.signals.finished.emit(None, str(e))
 
 class AIStreamWorker(QRunnable):
-    """Worker for streaming AI responses."""
     def __init__(self, messages, temperature):
         super().__init__()
         self.messages = messages
@@ -73,7 +64,6 @@ class AIStreamWorker(QRunnable):
     @pyqtSlot()
     def run(self):
         try:
-            # First check if the preset has a provider setting
             active_preset_index = SETTINGS.get("ai_active_preset_index", 0)
             presets = SETTINGS.get("ai_presets", [])
             
@@ -92,7 +82,6 @@ class AIStreamWorker(QRunnable):
             self.signals.error.emit(str(e))
 
     def _run_openrouter(self):
-        """Stream responses from OpenRouter API."""
         headers = {
             "Authorization": f"Bearer {SETTINGS.get('ai_api_key')}",
             "Content-Type": "application/json",
@@ -124,7 +113,6 @@ class AIStreamWorker(QRunnable):
         self.signals.finished.emit(full_response)
 
     def _run_gemini(self):
-        """Stream responses from Google Gemini API."""
         try:
             import google.generativeai as genai
         except ImportError:
@@ -143,16 +131,13 @@ class AIStreamWorker(QRunnable):
         active_preset = SETTINGS["ai_presets"][active_preset_index]
         model_name = active_preset.get("model", "gemini-2.5-pro")
         
-        # Get the system prompt from the preset
         system_prompt = active_preset.get("persona", "")
         
-        # Create model with system prompt
         gemini_model = genai.GenerativeModel(
             model_name,
             system_instruction=system_prompt
         )
         
-        # Convert OpenRouter format messages to Gemini format
         gemini_messages = []
         for msg in self.messages:
             role = "user" if msg["role"] == "user" else "model"
@@ -163,7 +148,6 @@ class AIStreamWorker(QRunnable):
         
         full_response = ""
         
-        # Use streaming with Gemini - send full conversation
         response = gemini_model.generate_content(
             gemini_messages,
             generation_config=genai.types.GenerationConfig(temperature=self.temperature),
@@ -176,7 +160,6 @@ class AIStreamWorker(QRunnable):
                     full_response += chunk.text
                     self.signals.chunk.emit(chunk.text)
         except Exception as e:
-            # Handle cases where response is empty or finish_reason indicates early stop
             if full_response:
                 self.signals.finished.emit(full_response)
             else:
@@ -188,7 +171,6 @@ class ImageWorkerSignals(QObject):
     finished = pyqtSignal(QPixmap, dict)
 
 class ImageWorker(QRunnable):
-    """Worker for fetching an image."""
     def __init__(self, url, post):
         super().__init__()
         self.url, self.post = url, post
@@ -223,16 +205,12 @@ class DataFetcher(QThread):
             self.finished.emit(b"", self.post, str(e))
 
 class RecommendationFetcher(QRunnable):
-    """
-    Worker that fetches recommendations by searching for top tags individually,
-    retrying on failure, and collecting random posts from each successful search.
-    """
     def __init__(self, top_tags, blacklisted_tags, posts_per_tag=3):
         super().__init__()
         self.top_tags = top_tags
         self.blacklisted_tags = blacklisted_tags
         self.posts_per_tag = posts_per_tag
-        self.signals = WorkerSignals() # finished(object, str), progress(int, int, str)
+        self.signals = WorkerSignals() 
 
     @pyqtSlot()
     def run(self):
@@ -241,7 +219,6 @@ class RecommendationFetcher(QRunnable):
         max_retries_per_tag = 5
         total_tags = len(self.top_tags)
 
-        # Pre-calculate content filter tags to apply client-side, avoiding Danbooru's tag limit.
         content_filter_tags = []
         if SETTINGS.get("allow_loli_shota") != "true":
             content_filter_tags.extend(["loli", "shota"])
@@ -273,7 +250,6 @@ class RecommendationFetcher(QRunnable):
                             random.shuffle(posts)
                             added_count = 0
                             for post in posts:
-                                # Client-side filtering for content tags
                                 post_tags = set(post.get('tag_string', '').split())
                                 if any(filter_tag in post_tags for filter_tag in content_filter_tags):
                                     continue

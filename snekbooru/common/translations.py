@@ -8,9 +8,8 @@ TRANSLATIONS = {"en": {}}
 SUPPORTED_LANGUAGES = {"en": "English"}
 
 def load_translations():
-    """Loads all .sneklang files from the lngpcks directory."""
     global TRANSLATIONS, SUPPORTED_LANGUAGES
-    lang_dir = get_resource_path("snekbooru\lngpcks")
+    lang_dir = get_resource_path("snekbooru/lngpcks")
     
     if not os.path.isdir(lang_dir):
         print(f"Language directory not found: {lang_dir}")
@@ -40,7 +39,6 @@ def load_translations():
             TRANSLATIONS['en'][key] = key
 
 def _tr(text, *args, **kwargs):
-    """Translates a given text string to the currently selected language."""
     if not SETTINGS:
         return text.format(*args, **kwargs) if args or kwargs else text
     lang = SETTINGS.get("language", "en")

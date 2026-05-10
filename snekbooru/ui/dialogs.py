@@ -1,3 +1,4 @@
+
 import os
 import re
 import shutil
@@ -44,7 +45,6 @@ from snekbooru.api.ehentai_utils import download_gallery_pages
 
 
 class CustomTitleBar(QWidget):
-    """A custom title bar widget for dialogs."""
     def __init__(self, parent, title="Dialog", has_icon=False):
         super().__init__(parent)
         self.parent = parent
@@ -70,7 +70,7 @@ class CustomTitleBar(QWidget):
 
         self.close_btn = QToolButton(); self.close_btn.clicked.connect(self.parent.close)
         self.close_btn.setObjectName("close_button")
-        self.close_btn.setFixedSize(46, 32) # Keep fixed size for consistent layout
+        self.close_btn.setFixedSize(46, 32) 
         self.close_btn.setObjectName("title_bar_button")
         layout.addWidget(self.close_btn)
 
@@ -78,7 +78,6 @@ class CustomTitleBar(QWidget):
         self.start_move_pos = None
 
     def _get_icon_color(self):
-        """Determines if theme is dark or light and returns appropriate icon color."""
         palette = self.palette()
         bg_color = palette.color(self.backgroundRole())
         r, g, b = bg_color.red(), bg_color.green(), bg_color.blue()
@@ -86,7 +85,6 @@ class CustomTitleBar(QWidget):
         return '#ffffff' if luminance < 0.5 else '#000000'
 
     def update_icons(self):
-        """Updates icons based on the current theme color."""
         icon_color = self._get_icon_color()
         if hasattr(self, 'close_btn'):
             self.close_btn.setIcon(qta.icon('fa5s.times', color=icon_color))
@@ -110,40 +108,28 @@ class CustomTitleBar(QWidget):
 
 
 class BaseDialog(QDialog):
-    """
-    Base dialog with a custom title bar and standardized layout.
-    Provides a consistent 'look and feel' across the application.
-    """
     def __init__(self, title, parent=None):
         super().__init__(parent)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setWindowTitle(title)
         
-        # Main layout with 1px border
         self.root_layout = QVBoxLayout(self)
         self.root_layout.setContentsMargins(1, 1, 1, 1)
         self.root_layout.setSpacing(0)
         self.setStyleSheet("QDialog { border: 1px solid #333; }")
 
-        # Custom Title Bar
         self.title_bar = CustomTitleBar(self, title)
         self.root_layout.addWidget(self.title_bar)
 
-        # Content area
         self.content_widget = QWidget()
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.setContentsMargins(15, 15, 15, 15)
         self.content_layout.setSpacing(10)
         self.root_layout.addWidget(self.content_widget)
         
-        # Standard Button Box (optional)
         self.button_layout = None
 
     def add_buttons(self, buttons_config):
-        """
-        Standardized way to add buttons to the bottom of the dialog.
-        buttons_config: list of (text, icon, callback, is_default)
-        """
         if not self.button_layout:
             self.button_layout = QHBoxLayout()
             self.button_layout.addStretch()
@@ -161,8 +147,6 @@ class BaseDialog(QDialog):
         return self.button_layout
 
     def set_content(self, widget):
-        """Replaces the entire content with a single widget."""
-        # Clear existing
         while self.content_layout.count():
             item = self.content_layout.takeAt(0)
             if item.widget():
@@ -170,7 +154,6 @@ class BaseDialog(QDialog):
         self.content_layout.addWidget(widget)
 
     def apply_theme(self):
-        """Update title bar icons when theme changes."""
         self.title_bar.update_icons()
 
     def showEvent(self, event):
@@ -688,20 +671,16 @@ class MangaBookDialog(BaseDialog):
         dialog.show()
 
     def showEvent(self, event):
-        """Update title bar icons when dialog is shown."""
         super().showEvent(event)
         self.apply_theme()
 
     def closeEvent(self, event):
-        """Clean up temporary manga files if they are in the temp directory."""
         if self.images_folder:
             try:
                 temp_root = os.path.abspath(snekbooru_temp_root())
                 folder_abs = os.path.abspath(self.images_folder)
-                # Only delete if it's inside our temp directory
                 if os.path.commonpath([temp_root, folder_abs]) == temp_root:
                     import shutil
-                    # Run in background to avoid UI freeze
                     def _bg_cleanup():
                         try:
                             shutil.rmtree(folder_abs, ignore_errors=True)
@@ -724,7 +703,6 @@ class ThemeEditorDialog(BaseDialog):
         self.editor = CodeEditor(); self.editor.setPlainText(theme_content)
         self.highlighter = sCSSHighlighter(self.editor.document())
         
-        # Setup Completer
         completer = QCompleter(SCSS_KEYWORDS + SCSS_PROPERTIES + SCSS_PSEUDO)
         self.editor.setCompleter(completer)
         
@@ -737,6 +715,9 @@ class ThemeEditorDialog(BaseDialog):
         self.content_layout.addLayout(button_row)
 
     def save_and_accept(self):
+        """
+        Saves your creative work and applies the new look.
+        """
         try:
             with open(self.theme_path, 'w', encoding='utf-8') as f: f.write(self.editor.toPlainText())
             self.accept()
@@ -746,8 +727,8 @@ class ThemeEditorDialog(BaseDialog):
 
 class HentaiSeriesDialog(BaseDialog):
     """
-    A dialog to display scraped information about a Hentai Haven series,
-    including a description and a list of episodes.
+    A detailed view for adult animated series, showing information 
+    about the plot and a list of all available episodes.
     """
     def __init__(self, series_data: dict, parent=None):
         super().__init__(series_data.get("title", "Hentai Series"), parent)
@@ -755,7 +736,6 @@ class HentaiSeriesDialog(BaseDialog):
         self.parent_app = parent
         self.setMinimumSize(800, 600)
 
-        # Description
         description_group = QGroupBox(_tr("Description"))
         description_layout = QVBoxLayout(description_group)
         description_browser = QTextBrowser()
@@ -765,7 +745,6 @@ class HentaiSeriesDialog(BaseDialog):
         description_layout.addWidget(description_browser)
         self.content_layout.addWidget(description_group)
 
-        # Episodes
         episodes_group = QGroupBox(_tr("Episodes"))
         episodes_layout = QVBoxLayout(episodes_group)
         self.episode_list = QListWidget()
@@ -776,6 +755,9 @@ class HentaiSeriesDialog(BaseDialog):
         self.populate_episodes()
 
     def populate_episodes(self):
+        """
+        Fills the list with all the episodes found for this series.
+        """
         episodes = self.series_data.get("episodes", [])
         if not episodes:
             self.episode_list.addItem(_tr("No episodes found."))
@@ -787,6 +769,9 @@ class HentaiSeriesDialog(BaseDialog):
             self.episode_list.addItem(item)
 
     def on_episode_selected(self, item: QListWidgetItem):
+        """
+        Handles what happens when you pick an episode to watch.
+        """
         episode_data = item.data(Qt.UserRole)
         episode_obj = episode_data.get("episode_obj")
         episode_title = episode_data.get("title")
@@ -795,7 +780,7 @@ class HentaiSeriesDialog(BaseDialog):
             QMessageBox.warning(self, "Error", "This episode has no data object.")
             return
 
-        from snekbooru.ui.main_window import _get_hhaven_stream_url # Import the new async helper
+        from snekbooru.ui.main_window import _get_hhaven_stream_url 
         worker = AsyncApiWorker(_get_hhaven_stream_url, episode_obj)
         def on_finished(stream_url, err):
             if err:
@@ -807,18 +792,20 @@ class HentaiSeriesDialog(BaseDialog):
         self.parent_app.threadpool.start(worker)
 
 class HentaiViewerDialog(BaseDialog):
-    """A dialog to display hentai videos using VLC-based player for proper HLS support."""
+    """
+    A cinematic video viewer specifically tuned for streaming animated 
+    content. It supports high-quality playback, full-screen mode, 
+    and smooth seek controls.
+    """
     def __init__(self, stream_url, title, parent=None):
         super().__init__(f"Hentai Viewer - {title}", parent)
         self.setMinimumSize(1280, 720)
         self.parent_app = parent.parent_app if hasattr(parent, 'parent_app') else parent
         self.stream_url = stream_url
 
-        # Media Stack (to show loading label)
         self.media_stack = QStackedWidget()
         self.content_layout.addWidget(self.media_stack, 1)
 
-        # Loading Label & Progress
         self.loading_widget = QWidget()
         loading_layout = QVBoxLayout(self.loading_widget)
         self.loading_label = QLabel(_tr("Loading video..."))
@@ -842,11 +829,9 @@ class HentaiViewerDialog(BaseDialog):
         
         self.media_stack.addWidget(self.loading_widget)
 
-        # Video Widget (using Apollo player for proper HLS support)
         self.apollo_video_player = ApolloVideoPlayer()
         self.media_stack.addWidget(self.apollo_video_player)
 
-        # Controls
         self.video_controls = QWidget()
         controls_layout = QHBoxLayout(self.video_controls)
         controls_layout.setContentsMargins(0, 0, 0, 0)
@@ -883,7 +868,6 @@ class HentaiViewerDialog(BaseDialog):
         controls_layout.addWidget(self.fullscreen_btn)
         self.content_layout.addWidget(self.video_controls)
 
-        # Connections
         self.play_pause_btn.clicked.connect(self.toggle_play_pause)
         self.seek_slider.sliderMoved.connect(self.seek_video)
         self.mute_btn.clicked.connect(self.toggle_mute)
@@ -895,28 +879,20 @@ class HentaiViewerDialog(BaseDialog):
         self.apollo_video_player.download_progress.connect(self.update_download_progress)
         self.apollo_video_player.error.connect(self.on_player_error)
 
-        # Make sure this dialog receives keyboard focus for keyPressEvent
         self.setFocusPolicy(Qt.StrongFocus)
         self.setFocus()
 
-        # Load media
         self.media_stack.setCurrentWidget(self.loading_widget)
-        # Use a worker to parse the M3U8 and get the final stream URL
         self.threadpool = QThreadPool()
         worker = ApiWorker(self._get_final_stream_url, stream_url)
         worker.signals.finished.connect(self._on_stream_url_resolved)
         self.threadpool.start(worker)
 
     def _get_final_stream_url(self, url):
-        """
-        Parses an M3U8 playlist to find the highest quality stream URL.
-        If the URL is not a playlist, it returns the original URL.
-        """
         import re
         try:
             headers = {'User-Agent': USER_AGENT, 'Referer': 'https://hentaihaven.xxx/'}
             
-            # If it's an M3U8 playlist, we need to parse it first
             if '.m3u8' in url:
                 r = requests.get(url, headers=headers, timeout=30)
                 r.raise_for_status()
@@ -936,11 +912,9 @@ class HentaiViewerDialog(BaseDialog):
                 
                 if streams:
                     streams.sort(key=lambda s: int(s['res'].split('x')[1]), reverse=True)
-                    # Return the M3U8 playlist URL instead of individual stream
-                    # Apollo will handle the HLS playlist properly
                     return url, None
 
-            return url, None # Return original URL if not a playlist or no streams found
+            return url, None 
         except Exception as e:
             return None, str(e)
 
@@ -960,7 +934,6 @@ class HentaiViewerDialog(BaseDialog):
         self.download_status_label.setText(_tr("Starting playback..."))
 
     def update_download_progress(self, progress):
-        """Update the download progress bar and status text."""
         self.download_progress_bar.setValue(int(progress))
         if progress < 33:
             self.download_status_label.setText(_tr("Prefetching video segments..."))
@@ -971,8 +944,6 @@ class HentaiViewerDialog(BaseDialog):
         else:
             self.download_status_label.setText(_tr("Ready!"))
 
-
-
     def toggle_play_pause(self):
         if self.apollo_video_player.is_playing:
             self.apollo_video_player.pause()
@@ -982,13 +953,10 @@ class HentaiViewerDialog(BaseDialog):
             self.play_pause_btn.setIcon(qta.icon('fa5s.pause'))
 
     def seek_video(self, position_ms):
-        """Seek to a position in the video."""
         self.apollo_video_player.seek(position_ms)
 
     def on_volume_changed(self, volume):
-        """Update volume when slider changes."""
         self.apollo_video_player.set_volume(volume)
-        # Update mute button icon based on volume
         if volume == 0:
             self.mute_btn.setIcon(qta.icon('fa5s.volume-mute'))
         elif volume < 50:
@@ -997,7 +965,6 @@ class HentaiViewerDialog(BaseDialog):
             self.mute_btn.setIcon(qta.icon('fa5s.volume-up'))
 
     def toggle_mute(self):
-        """Toggle mute state."""
         self.apollo_video_player.toggle_mute()
         if self.apollo_video_player.is_muted():
             self.mute_btn.setIcon(qta.icon('fa5s.volume-mute'))
@@ -1007,7 +974,6 @@ class HentaiViewerDialog(BaseDialog):
             self.volume_slider.setValue(100)
 
     def toggle_fullscreen(self):
-        """Toggle fullscreen mode."""
         self.apollo_video_player.toggle_fullscreen()
         if self.apollo_video_player.is_fullscreen:
             self.fullscreen_btn.setIcon(qta.icon('fa5s.compress'))
@@ -1015,18 +981,15 @@ class HentaiViewerDialog(BaseDialog):
             self.fullscreen_btn.setIcon(qta.icon('fa5s.expand'))
 
     def update_position(self, position_ms):
-        """Update seek slider when position changes."""
         if not self.seek_slider.isSliderDown():
             self.seek_slider.setValue(position_ms)
         self.update_time_label(position_ms, self.seek_slider.maximum())
 
     def update_duration(self, duration_ms):
-        """Update seek slider range when duration is known."""
         self.seek_slider.setRange(0, duration_ms)
         self.update_time_label(self.seek_slider.value(), duration_ms)
 
     def update_play_pause_button(self, state):
-        """Update play/pause button based on playback state."""
         if state == 'playing':
             self.play_pause_btn.setIcon(qta.icon('fa5s.pause'))
         else:
@@ -1035,7 +998,6 @@ class HentaiViewerDialog(BaseDialog):
                 self.apollo_video_player.play()
 
     def update_time_label(self, position_ms, duration_ms):
-        """Update the time display label."""
         if duration_ms == 0:
             return
         pos_min, pos_sec = divmod(position_ms // 1000, 60)
@@ -1043,55 +1005,44 @@ class HentaiViewerDialog(BaseDialog):
         self.time_label.setText(f"{pos_min:02}:{pos_sec:02} / {dur_min:02}:{dur_sec:02}")
 
     def on_player_error(self, error_msg):
-        """Handle player errors."""
         self.loading_label.setText(_tr("Playback error: {error}").format(error=error_msg))
         self.download_progress_bar.hide()
         self.download_status_label.hide()
         self.media_stack.setCurrentWidget(self.loading_widget)
 
     def keyPressEvent(self, event):
-        """Handle key presses for video control."""
         key = event.key()
         
-        # Space: toggle play/pause
         if key == Qt.Key_Space:
             self.toggle_play_pause()
             event.accept()
-        # F: toggle fullscreen
         elif key == Qt.Key_F:
             self.toggle_fullscreen()
             event.accept()
-        # M: toggle mute
         elif key == Qt.Key_M:
             self.toggle_mute()
             event.accept()
-        # Left arrow: seek back 10s
         elif key == Qt.Key_Left:
             if self.apollo_video_player.player:
                 current_pos = self.apollo_video_player.player.get_position_ms()
                 self.apollo_video_player.seek(max(0, current_pos - 10000))
             event.accept()
-        # Right arrow: seek forward 10s
         elif key == Qt.Key_Right:
             if self.apollo_video_player.player:
                 current_pos = self.apollo_video_player.player.get_position_ms()
                 self.apollo_video_player.seek(current_pos + 10000)
             event.accept()
-        # Up arrow: volume up
         elif key == Qt.Key_Up:
             new_vol = min(100, self.volume_slider.value() + 10)
             self.volume_slider.setValue(new_vol)
             event.accept()
-        # Down arrow: volume down
         elif key == Qt.Key_Down:
             new_vol = max(0, self.volume_slider.value() - 10)
             self.volume_slider.setValue(new_vol)
             event.accept()
-        # Escape: close dialog
         elif key == Qt.Key_Escape:
             self.close()
             event.accept()
-        # L: toggle loop
         elif key == Qt.Key_L:
             self.loop_btn.setChecked(not self.loop_btn.isChecked())
             event.accept()
@@ -1099,7 +1050,6 @@ class HentaiViewerDialog(BaseDialog):
             super().keyPressEvent(event)
 
     def closeEvent(self, event):
-        # Stop the player in the main thread to avoid QObject::killTimer issues
         try:
             self.apollo_video_player.exit()
         except Exception:
@@ -1108,7 +1058,6 @@ class HentaiViewerDialog(BaseDialog):
         super().closeEvent(event)
 
 class BooruEditorDialog(BaseDialog):
-    """A dialog for adding or editing a custom booru configuration."""
     def __init__(self, booru_config=None, parent=None):
         title = _tr("Booru Editor") if booru_config else _tr("Add New Booru")
         super().__init__(title, parent)
@@ -1117,7 +1066,6 @@ class BooruEditorDialog(BaseDialog):
 
         self.tabs = QTabWidget()
         
-        # --- Simple Tab ---
         simple_tab = QWidget()
         simple_form = QFormLayout(simple_tab)
         self.simple_name = QLineEdit(self.booru_config.get("name", ""))
@@ -1127,7 +1075,6 @@ class BooruEditorDialog(BaseDialog):
         self.simple_booru_type.addItems(["Gelbooru-like (JSON)", "Danbooru-like (JSON)", "Rule34-like (XML)"])
         self.simple_auth_type = QComboBox(); self.simple_auth_type.addItems(["None", "User ID & API Key", "Login & API Key"])
         
-        # Simple tab credential fields
         self.simple_username_label = QLabel(_tr("Username/ID:"))
         self.simple_username = QLineEdit(self.booru_config.get("username", ""))
         self.simple_api_key_label = QLabel(_tr("API Key:"))
@@ -1142,7 +1089,6 @@ class BooruEditorDialog(BaseDialog):
         simple_form.addRow(self.simple_api_key_label, self.simple_api_key)
 
 
-        # --- Advanced Tab ---
         advanced_tab = QWidget()
         adv_form = QFormLayout(advanced_tab)
         self.adv_name = QLineEdit(self.booru_config.get("name", ""))
@@ -1153,7 +1099,6 @@ class BooruEditorDialog(BaseDialog):
         self.adv_response_format = QComboBox(); self.adv_response_format.addItems(["Gelbooru JSON", "Danbooru JSON", "Rule34 XML"])
         self.adv_auth_type = QComboBox(); self.adv_auth_type.addItems(["None", "User ID & API Key", "Login & API Key"])
         
-        # Advanced tab credential fields
         self.adv_username_label = QLabel(_tr("Username/ID:"))
         self.adv_username = QLineEdit(self.booru_config.get("username", ""))
         self.adv_api_key_label = QLabel(_tr("API Key:"))
@@ -1173,7 +1118,6 @@ class BooruEditorDialog(BaseDialog):
         self.tabs.addTab(advanced_tab, _tr("Advanced"))
         self.content_layout.addWidget(self.tabs)
 
-        # Buttons
         button_row = QHBoxLayout()
         test_btn = QPushButton(qta.icon('fa5s.vial'), _tr(" Test Configuration"))
         save_btn = QPushButton(qta.icon('fa5s.save'), _tr(" Save"))
@@ -1185,16 +1129,13 @@ class BooruEditorDialog(BaseDialog):
         save_btn.clicked.connect(self.accept)
         cancel_btn.clicked.connect(self.reject)
         
-        # Connect auth_type changes to show/hide credential fields
         self.simple_auth_type.currentIndexChanged.connect(self._update_simple_auth_fields)
         self.adv_auth_type.currentIndexChanged.connect(self._update_adv_auth_fields)
         
-        # Initial visibility update
         self._update_simple_auth_fields()
         self._update_adv_auth_fields()
     
     def _update_simple_auth_fields(self):
-        """Show/hide credential fields based on simple tab auth type selection."""
         auth_type = self.simple_auth_type.currentText()
         is_none = auth_type == "None"
         self.simple_username_label.setVisible(not is_none)
@@ -1203,7 +1144,6 @@ class BooruEditorDialog(BaseDialog):
         self.simple_api_key.setVisible(not is_none)
     
     def _update_adv_auth_fields(self):
-        """Show/hide credential fields based on advanced tab auth type selection."""
         auth_type = self.adv_auth_type.currentText()
         is_none = auth_type == "None"
         self.adv_username_label.setVisible(not is_none)
@@ -1213,7 +1153,6 @@ class BooruEditorDialog(BaseDialog):
 
 
     def get_config(self):
-        """Constructs the booru config dictionary from the form fields."""
         is_simple = self.tabs.currentIndex() == 0
         if is_simple:
             name = self.simple_name.text().strip()
@@ -1228,7 +1167,6 @@ class BooruEditorDialog(BaseDialog):
                 config["username"] = self.simple_username.text().strip()
                 config["api_key"] = self.simple_api_key.text().strip()
             
-            # Build URLs with auth placeholders if authentication is required
             auth_suffix = ""
             if auth == "User ID & API Key":
                 auth_suffix = "&login={login}&api_key={api_key}"
@@ -1248,7 +1186,7 @@ class BooruEditorDialog(BaseDialog):
                 config["tags_url"] = f"{base_url}/autocomplete.php?q={{pattern}}{auth_suffix}"
                 config["response_format"] = "Rule34 XML"
             return config
-        else: # Advanced
+        else: 
             name = self.adv_name.text().strip()
             posts_url = self.adv_posts_url.text().strip()
             if not name or not posts_url: return None
@@ -1287,7 +1225,7 @@ class SettingsDialog(BaseDialog):
         super().__init__(_tr("Settings"), parent)
         self.setMinimumWidth(600)
         self.custom_fonts_path = custom_fonts_path
-        self.parent_app = parent # Store a reference to the main app
+        self.parent_app = parent 
 
         self.tabs = QTabWidget()
         self.content_layout.addWidget(self.tabs)
@@ -1300,14 +1238,12 @@ class SettingsDialog(BaseDialog):
         self._create_tags_tab()
         self._create_hotkeys_tab()
 
-        # Buttons
         row = QHBoxLayout()
         self.save_btn = QPushButton(qta.icon('fa5s.save'), _tr(" Save")); self.save_btn.clicked.connect(self.accept)
         self.cancel_btn = QPushButton(qta.icon('fa5s.times'), _tr(" Cancel")); self.cancel_btn.clicked.connect(self.reject)
         row.addStretch(); row.addWidget(self.save_btn); row.addWidget(self.cancel_btn); 
         self.content_layout.addLayout(row)
 
-        # Connections for buttons
         self.clear_history_btn.clicked.connect(parent.clear_search_history)
         self.new_btn.clicked.connect(self.new_theme); self.edit_btn.clicked.connect(self.edit_selected_theme)
         self.delete_btn.clicked.connect(self.delete_selected_theme); self.import_btn.clicked.connect(self.import_theme)
@@ -1319,8 +1255,6 @@ class SettingsDialog(BaseDialog):
         self.reset_app_btn.clicked.connect(self.clear_all_data)
 
     def _on_allow_explicit_changed(self, state):
-        """Enable/disable sub-options when the main explicit setting changes."""
-        # This method is now a placeholder. The toggles are independent.
         pass
 
     def _on_allow_loli_shota_changed(self, state):
@@ -1334,7 +1268,6 @@ class SettingsDialog(BaseDialog):
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
 
         self.language_selector = QComboBox()
-        # Sort languages alphabetically for consistent ordering, keeping English at the top.
         sorted_languages = sorted(
             (item for item in SUPPORTED_LANGUAGES.items() if item[0] != 'en'),
             key=lambda item: item[1]
@@ -1409,12 +1342,11 @@ class SettingsDialog(BaseDialog):
         form.addRow(_tr("Personalization:"), self.enable_recommendations)
         form.addRow(_tr("Network:"), self.fetch_all_site_stats)
 
-        form.addRow(_tr("Download folder:"), QWidget()) # Use a dummy widget for layout
+        form.addRow(_tr("Download folder:"), QWidget()) 
         form.itemAt(form.rowCount()-1, QFormLayout.FieldRole).widget().setLayout(dd)
         form.addRow(_tr("Temp cleanup:"), self.temp_cleanup_minutes)
         form.addRow(_tr("Search History:"), self.clear_history_btn)
 
-        # Danger Zone
         self.danger_group = QGroupBox(_tr("Danger Zone"))
         self.danger_group.setObjectName("danger_zone")
         danger_layout = QVBoxLayout()
@@ -1430,7 +1362,7 @@ class SettingsDialog(BaseDialog):
         self.reset_app_btn.setToolTip("Deletes all settings, history, and favorites and closes the app.\nThis does NOT delete your downloaded images.\nThis action cannot be undone.")
         danger_layout.addWidget(self.reset_app_btn)
         
-        self._on_allow_explicit_changed(self.allow_explicit.checkState()) # Set initial state
+        self._on_allow_explicit_changed(self.allow_explicit.checkState()) 
 
         form.addRow(self.danger_group)
         self.tabs.addTab(tab, qta.icon('fa5s.cogs'), _tr("General"))
@@ -1497,12 +1429,10 @@ class SettingsDialog(BaseDialog):
         sources_group_layout.addStretch()
         layout.addWidget(sources_group, 0, Qt.AlignTop)
 
-        # Custom Sources Tab
         custom_sources_tab = QWidget()
         custom_sources_layout = QVBoxLayout()
         custom_sources_tab.setLayout(custom_sources_layout)
         
-        # Add disclaimer warning
         disclaimer = QLabel(_tr("⚠️ Custom sources may have parsing errors or bugs if the app is not fully compatible with their API structure. Please report any issues. Right-click to select sources and left-click to enable/disable. Save settings after making changes and then reopen them to ensure sources appear and are usable."))
         disclaimer.setWordWrap(True)
         disclaimer.setStyleSheet("color: #FFA500; font-style: italic;")
@@ -1511,13 +1441,14 @@ class SettingsDialog(BaseDialog):
         self.boorus_list_widget = QListWidget()
         self.boorus_list_widget.itemDoubleClicked.connect(self.edit_booru)
         custom_sources_layout.addWidget(self.boorus_list_widget)
-        self.boorus_list_widget.itemClicked.connect(self._toggle_booru_enabled)  # Toggle enable/disable on click
+        self.boorus_list_widget.itemClicked.connect(self._toggle_booru_enabled)  
         booru_button_row = QHBoxLayout()
         self.new_booru_btn = QPushButton(qta.icon('fa5s.plus'), _tr(" New"))
         self.edit_booru_btn = QPushButton(qta.icon('fa5s.edit'), _tr(" Edit"))
         self.delete_booru_btn = QPushButton(qta.icon('fa5s.trash-alt'), _tr(" Delete"))
         booru_button_row.addWidget(self.new_booru_btn); booru_button_row.addWidget(self.edit_booru_btn); booru_button_row.addWidget(self.delete_booru_btn)
         booru_button_row.addStretch()
+
         custom_sources_layout.addLayout(booru_button_row)
         self.populate_boorus_list()
         layout.addWidget(custom_sources_tab)
@@ -1562,7 +1493,7 @@ class SettingsDialog(BaseDialog):
         api_layout = QVBoxLayout(api_tab)
         api_layout.setAlignment(Qt.AlignTop)
         api_layout.addWidget(gel_group)
-        # Danbooru Group
+
         dan_group = QGroupBox(_tr("Danbooru API"))
         dan_form = QFormLayout()
         dan_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
@@ -1573,7 +1504,6 @@ class SettingsDialog(BaseDialog):
         dan_group.setLayout(dan_form)
         api_layout.addWidget(dan_group)
 
-        # Rule34 Group
         r34_group = QGroupBox(_tr("Rule34 API"))
         r34_form = QFormLayout()
         r34_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
@@ -1584,24 +1514,20 @@ class SettingsDialog(BaseDialog):
         r34_group.setLayout(r34_form)
         api_layout.addWidget(r34_group)
 
-        # AI API Group
         ai_api_group = QGroupBox(_tr("AI API"))
         ai_api_form = QFormLayout()
         ai_api_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         
-        # API Provider Selection
         self.ai_provider_combo = QComboBox()
         self.ai_provider_combo.addItems(["OpenRouter", "Google Gemini (Experimental)"])
         self.ai_provider_combo.setCurrentText(SETTINGS.get("ai_provider", "OpenRouter"))
         ai_api_form.addRow(_tr("AI Provider:"), self.ai_provider_combo)
         
-        # OpenRouter Key
         self.ai_api_key = QLineEdit(SETTINGS.get("ai_api_key", "")); self.ai_api_key.setEchoMode(QLineEdit.Password)
         self.ai_endpoint = QLineEdit(SETTINGS.get("ai_endpoint", "https://openrouter.ai/api/v1/chat/completions"))
         ai_api_form.addRow(_tr("OpenRouter API Key:"), self.ai_api_key)
         ai_api_form.addRow(_tr("OpenRouter Endpoint:"), self.ai_endpoint)
         
-        # Gemini Key
         self.gemini_api_key = QLineEdit(SETTINGS.get("gemini_api_key", "")); self.gemini_api_key.setEchoMode(QLineEdit.Password)
         self.gemini_api_key.setToolTip(_tr("Get your API key from https://ai.google.dev/"))
         ai_api_form.addRow(_tr("Gemini API Key:"), self.gemini_api_key)
@@ -1620,13 +1546,12 @@ class SettingsDialog(BaseDialog):
 
         self.window_size_combo = QComboBox()
         
-        # Get screen resolution to populate available sizes
         try:
             from PyQt5.QtWidgets import QApplication
             screen_size = QApplication.primaryScreen().size()
             screen_w, screen_h = screen_size.width(), screen_size.height()
         except Exception:
-            screen_w, screen_h = 1920, 1080 # Fallback
+            screen_w, screen_h = 1920, 1080 
 
         all_resolutions = {
             "1280x720 (HD)", "1600x900 (HD+)", "1920x1080 (Full HD)", 
@@ -1682,7 +1607,7 @@ class SettingsDialog(BaseDialog):
         form.addRow(_tr("Thumbnail Size:"), self.thumbnail_size)
 
         self.auto_scale_grid_check.toggled.connect(on_auto_scale_toggled)
-        on_auto_scale_toggled(self.auto_scale_grid_check.isChecked()) # Set initial state
+        on_auto_scale_toggled(self.auto_scale_grid_check.isChecked()) 
 
         self.video_playback_method_combo = QComboBox()
         self.video_playback_method_combo.addItems([_tr("Download First (Reliable)"), _tr("Stream (Experimental)")])
@@ -1707,7 +1632,6 @@ class SettingsDialog(BaseDialog):
         self.tabs.addTab(tab, qta.icon('fa5s.desktop'), _tr("Graphics"))
 
     def reset_hotkeys(self):
-        """Resets the hotkey editor fields to their default values."""
         reply = QMessageBox.question(self, _tr("Reset Hotkeys"), _tr("Are you sure you want to reset all hotkeys to their default values?"), QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
             for action, seq_str in DEFAULT_HOTKEYS.items():
@@ -1787,7 +1711,7 @@ class SettingsDialog(BaseDialog):
             with open(theme_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             editor = ThemeEditorDialog(theme_path, content, self)
-            editor.exec_() # The editor handles saving, no need to check result
+            editor.exec_() 
         except Exception as e:
             QMessageBox.critical(self, _tr("Edit Error"), _tr("Could not open theme for editing.\n\nError: {error}").format(error=e))
 
@@ -1806,15 +1730,12 @@ class SettingsDialog(BaseDialog):
         self.boorus_list_widget.clear()
         enabled_sources = SETTINGS.get("enabled_sources", ["Gelbooru"])
         for booru in self.parent_app.custom_boorus:
-            # Show + if not enabled, - if enabled
             status_indicator = "✓" if booru['name'] in enabled_sources else "○"
             display_name = f"{booru['name']}  {status_indicator}"
             self.boorus_list_widget.addItem(display_name)
 
     def _toggle_booru_enabled(self, item):
-        """Toggle enable/disable of custom booru by clicking on it."""
         display_name = item.text()
-        # Extract the booru name (everything before the status indicator)
         booru_name = display_name.rsplit('  ', 1)[0]
         
         enabled_sources = SETTINGS.get("enabled_sources", ["Gelbooru"])
@@ -1843,7 +1764,6 @@ class SettingsDialog(BaseDialog):
     def edit_booru(self):
         current_item = self.boorus_list_widget.currentItem()
         if not current_item: return
-        # Extract booru name from display format 'name  indicator'
         display_name = current_item.text()
         selected_name = display_name.rsplit('  ', 1)[0] if '  ' in display_name else display_name
         booru_to_edit = next((b for b in self.parent_app.custom_boorus if b['name'] == selected_name), None)
@@ -1863,7 +1783,6 @@ class SettingsDialog(BaseDialog):
     def delete_booru(self):
         current_item = self.boorus_list_widget.currentItem()
         if not current_item: return
-        # Extract booru name from display format 'name  indicator'
         display_name = current_item.text()
         booru_name = display_name.rsplit('  ', 1)[0] if '  ' in display_name else display_name
         reply = QMessageBox.question(self, _tr("Confirm Delete"), _tr("Are you sure you want to delete the custom source '{name}'?").format(name=booru_name), QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
@@ -1873,18 +1792,14 @@ class SettingsDialog(BaseDialog):
             self.populate_boorus_list()
 
     def clear_all_data(self):
-        """Clear all app data and reset to default settings."""
         reply = QMessageBox.warning(self, _tr("Clear All Data"), 
             _tr("This will delete all settings, history, favorites, and custom sources.\nYour downloaded images will NOT be deleted.\nThis action cannot be undone.\n\nAre you sure?"),
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
-            # Clear all data in parent app
             self.parent_app.clear_all_data()
-            # Close the dialog
             self.reject()
 
     def show_styling_help(self):
-        """Displays a dialog with help on how to style the application."""
         md_text = f"""
 # The sCSS Styling System
 
@@ -2025,7 +1940,7 @@ sTabBar::tab:selected {{ /* The currently active tab */
 
 ### Styling by ID (`objectName`)
 
-Some elements have a unique ID (called an `objectName` in Qt) for highly specific styling. This is the most powerful way to target a single, specific widget. These are prefixed with ``, just like in web CSS.
+Some elements have a unique ID (called an `objectName` in Qt) for highly specific styling. This is the most powerful way to target a single, specific widget. These are prefixed with `#`, just like in web CSS.
 
 *   `sWidget#main_window`: The main application window. **Use this to set a global background image.**
 *   `sTabWidget#main_tabs`: The main tab widget for Home, Browser, Favorites, etc.

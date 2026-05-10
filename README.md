@@ -1,18 +1,18 @@
 <p align="center">
-  <img src="graphics/logo.png" alt="Snekbooru Logo" width="256">
+  <img src="graphics/logo.png" alt="Snekbooru Logo" width="512">
 </p>
 
 # IMPORTANT NOTICE
 ### This README is still maintained, however it is recommended
-that you go to https://snekbooru.org/ for more information regarding this project. (Usually a few hours behind on updates however)
+that you go to https://snekbooru.org/ for more information regarding this project. (Usually a few hours/days behind on updates however)
 
 # Snekbooru
 ### Finally common sourced!
 ## Disclaimers
   - **THIS IS NOT A WRAPPER FOR THE PyPi PROJECT [Snakebooru](https://pypi.org/project/snakebooru)**
-  - **THIS PROJECT IS CLOSED SOURCE, FOR MORE INFORMATION AND INQUIERIES PLEASE CONTACT THE CREATOR AND DEVELOPER atroubledsnake**
+  - **THIS PROJECT IS COMMON SOURCE, FOR MORE INFORMATION AND INQUIERIES PLEASE CONTACT THE CREATOR AND DEVELOPER atroubledsnake**
   - **PROJECT VERSIONS 6.0.0 AND BELOW MAY CAUSE WINDOWS DEFENDER OR YOUR ANTIVIRUS TO BLOCK OUR APP DURING INSTALL OR RUNNING, THIS IS BECAUSE OF THE FACT WE DO NOT POSSES A CODE SIGNING LISCENCE AND OBFUSCATION TECHNIQUES USED TO KEEP THE SOURCE CODE SECURE**
-  - **NOTE: IF YOU POSSES A VERSION FROM PRE 6.0.0 IF YOU INSTALL THE NEWEST VERSION YOU WILL HAVE TO MANUALLY REMOVE THE OLD INSTALLATION IN C:\Program Files (x86)\Snekbooru, SINCE THE NEW INSTALLER INSTALLS TO C:\Program Files\Snekbooru AND YOU WILL END UP WITH TWO INSTALLATIONS IF YOU DON'T, SORRY FOR THE INCONVENIENCE**
+  - **NOTE: IF YOU POSSES A VERSION FROM PRE 6.0.0 IF YOU INSTALL THE NEWEST VERSION YOU WILL HAVE TO MANUALLY REMOVE THE OLD INSTALLATION IN C:\Program Files (x86)\Snekbooru, SINCE THE NEW INSTALLER INSTALLS TO C:\Program Files\Snekbooru AND YOU WILL END UP WITH TWO INSTALLATIONS IF YOU DON'T, SORRY FOR THE INCONVENIENCE (ALTERNATIVELY YOU CAN CHANGE THE INSTALLATION PATH WITHIN THE INSTALLER ITSELF TO THE CORRECT LOCATION)**
 
 ## Showcase
 
@@ -66,7 +66,7 @@ that you go to https://snekbooru.org/ for more information regarding this projec
 - **Random Post/Tag**: Discover new content and tags with the click of a button.
 - **Tag Suggestion System**: Get ideas for new tags to explore.
 - **Multiple Minigames**: Test your knowledge and have fun with several built in games:
-  - Tag Guesser, Score Showdown, Missing Tag, Guess the Score
+  - Post Showdown, Tag Guesser and Image Scramble!!
 
 ## Download
 Windows precompilation only for now
@@ -100,6 +100,7 @@ Windows precompilation only for now
 - **Danbooru**: Available with a [Danbooru account](https://danbooru.donmai.us/users/new).
 - **Rule34**: Available with a [Rule34 account](https://www.google.com/url?sa=t&rct=j&q=&esrc=s&source=web&cd=&ved=2ahUKEwiBnqiH1KuPAxUrEhAIHQ4mIeoQFnoECAoQAQ&url=https%3A%2F%2Frule34.xxx%2Findex.php%3Fpage%3Daccount%26s%3Dreg&usg=AOvVaw3TBT0l81tteZ1h8o6JIaHA&opi=89978449).
 - **AI Chat (OpenRouter)**: Get a free key from [OpenRouter.ai](https://openrouter.ai/), a gateway for various AI models.
+- **AI Chat (Google DeepMind Gemini)**: Free key available with a [Google DeepMind account](https://ai.google.dev/gemini-api/docs).
 
 The application works without API keys but may have reduced functionality or be subject to stricter rate limits.
 
@@ -186,6 +187,20 @@ For bug reports, feature requests, and community discussion, please join our Dis
 - Contributors: 69st (Discord), _shidouuu (Discord)
 
 ## Changelog
+### Release Version 6.0.1
+- **Security Audit & Hardening**:
+  - Implemented URL encoding for all search queries to prevent injection vulnerabilities.
+  - Enabled Content Security Policy (CSP) in the media viewer for improved browsing safety.
+  - Sanitized file extensions during downloads to prevent path traversal risks.
+- **Zerochan Integration Fixes**:
+  - Removed unsupported rating tags that caused search failures.
+  - Implemented automatic tag capitalization to match Zerochan's search requirements.
+- **Danbooru Stability**:
+  - Optimized search queries to stay within Danbooru's tag limits, resolving 422 errors.
+- **Bug Fixes**:
+  - Fixed a `NameError` in the Zerochan fetcher.
+  - Added User-Agent headers to site statistic scraping to prevent connection resets on yande.re.
+  - Hardened hardware ID retrieval by disabling shell execution.
 ### Release Version 6.0.0
 - FINALLY got rid of VLC and Qt's video player, the app now uses its own video player that I wrote myself (I'll release the source code to SNEK_Apollo once I finish Linux compatibility)
 - Added 4 new languages (Korean, Turkish, Dutch and Italian) and introduced a great number of changes to the prexisting lngpcks
