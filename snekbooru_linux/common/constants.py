@@ -25,7 +25,7 @@ WAIFU_PICS_NSFW_CATEGORIES = [
     "waifu", "neko", "trap", "blowjob"
 ]
 
-USER_AGENT = "Snekbooru/6.0.0 (1.0.2.2) Linux Release (https://www.snekbooru.org)"
+USER_AGENT = "Snekbooru/6.0.1 (1.0.2.2) Linux Release (https://www.snekbooru.org)"
 DEFAULT_AI_MODEL = "cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
 
 BORING_TAGS = {
