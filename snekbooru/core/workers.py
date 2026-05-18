@@ -178,15 +178,21 @@ class ImageWorker(QRunnable):
 
     @pyqtSlot()
     def run(self):
+        def _safe_emit(pixmap):
+            try:
+                self.signals.finished.emit(pixmap, self.post)
+            except RuntimeError:
+                return
+
         try:
             from snekbooru.common.helpers import load_pixmap_from_data
             r = requests.get(self.url, headers={"User-Agent": USER_AGENT}, timeout=30)
             r.raise_for_status()
             pix = load_pixmap_from_data(r.content)
-            self.signals.finished.emit(pix, self.post)
+            _safe_emit(pix)
         except Exception as e:
             print(f"ImageWorker failed for {self.url}: {e}")
-            self.signals.finished.emit(QPixmap(), self.post)
+            _safe_emit(QPixmap())
 
 class DataFetcher(QThread):
     finished = pyqtSignal(bytes, dict, str)

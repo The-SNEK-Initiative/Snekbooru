@@ -2033,7 +2033,6 @@ You can combine type, ID, and class selectors for very specific targeting: `sGro
         dlg.setMinimumSize(600, 500)
 
         text_browser = QTextBrowser()
-        # Convert Markdown to HTML for display in QTextBrowser
         html_text = markdown.markdown(md_text, extensions=['fenced_code', 'codehilite'])
         html_text = f"<style>{PYGMENTS_CSS}</style>{html_text}"
         text_browser.setHtml(html_text)

@@ -2,6 +2,7 @@ import sys
 import os
 import threading
 import time
+import ctypes
 from enum import Enum
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QApplication
 from PyQt5.QtCore import pyqtSignal, QTimer, Qt
@@ -30,6 +31,7 @@ class ApolloVideoPlayer(QWidget):
     state_changed = pyqtSignal(str) 
     error = pyqtSignal(str)
     download_progress = pyqtSignal(float)
+    DEBUG_LOGS = False
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -44,6 +46,7 @@ class ApolloVideoPlayer(QWidget):
         self._current_volume = 1.0 
         self._is_muted = False
         self._last_emitted_duration = -1
+        self._session_active = False
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -84,7 +87,8 @@ class ApolloVideoPlayer(QWidget):
         
         old_state = self._state
         self._state = new_state
-        print(f"[ApolloPlayer] State Change: {old_state.value} -> {new_state.value}")
+        if self.DEBUG_LOGS:
+            print(f"[ApolloPlayer] State Change: {old_state.value} -> {new_state.value}")
         
         legacy_state_map = {
             PlayerState.PLAYING: "playing",
@@ -98,7 +102,8 @@ class ApolloVideoPlayer(QWidget):
         self.state_changed.emit(legacy_state_map.get(new_state, "stopped"))
 
     def load(self, media_url):
-        print(f"[ApolloPlayer] load: {media_url}")
+        if self.DEBUG_LOGS:
+            print(f"[ApolloPlayer] load: {media_url}")
         if not self.player:
             return
             
@@ -106,13 +111,37 @@ class ApolloVideoPlayer(QWidget):
             media_url = media_url.strip().replace("\\", "/")
             if media_url.startswith("//"):
                 media_url = "https:" + media_url
+            media_url = self._normalize_windows_local_path(media_url)
 
         self.exit()
         
         self.media_url = media_url
         self.duration_ms = 0
         self._last_emitted_duration = -1
+        self._session_active = True
         self._change_state(PlayerState.IDLE)
+
+    def _normalize_windows_local_path(self, media_url):
+        if not isinstance(media_url, str):
+            return media_url
+        if not sys.platform.startswith("win"):
+            return media_url
+        if media_url.startswith(("http://", "https://")):
+            return media_url
+
+        candidate = media_url.replace("/", "\\")
+        if not os.path.exists(candidate):
+            return media_url
+
+        try:
+            buf_len = 32768
+            out_buf = ctypes.create_unicode_buffer(buf_len)
+            size = ctypes.windll.kernel32.GetLongPathNameW(candidate, out_buf, buf_len)
+            if size > 0:
+                return out_buf.value.replace("\\", "/")
+        except Exception:
+            pass
+        return os.path.abspath(candidate).replace("\\", "/")
         
     def play(self):
         if not self.player or not self.media_url:
@@ -166,6 +195,7 @@ class ApolloVideoPlayer(QWidget):
     def _handle_open_error(self, error_msg):
         self._change_state(PlayerState.ERROR)
         self.loading_label.hide()
+        self._session_active = False
         self.error.emit(error_msg)
 
     def _on_opened(self):
@@ -200,8 +230,10 @@ class ApolloVideoPlayer(QWidget):
     def exit(self):
         self.poll_timer.stop()
         self.loading_label.hide()
-        
-        print("[ApolloPlayer] exit() called")
+        self._session_active = False
+        self.media_url = None
+        if self.DEBUG_LOGS:
+            print("[ApolloPlayer] exit() called")
         if self.player:
             try:
                 self.player.stop()
@@ -236,7 +268,7 @@ class ApolloVideoPlayer(QWidget):
         return self._is_muted
         
     def _poll_player(self):
-        if not self.player:
+        if not self.player or not self._session_active:
             return
             
         state = self.player.get_state()

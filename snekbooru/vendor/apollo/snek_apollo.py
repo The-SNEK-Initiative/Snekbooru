@@ -35,7 +35,6 @@ class SnekApolloPlayer:
     """
     def __init__(self, dll_path=None):
         if dll_path is None:
-            # Default to checking the target/release directory
             base_dir = os.path.dirname(os.path.abspath(__file__))
             dll_name = "snek_apollo.dll" if sys.platform == "win32" else "libsnek_apollo.so"
             dll_path = os.path.join(base_dir, dll_name)
@@ -47,7 +46,6 @@ class SnekApolloPlayer:
             
         self.lib = ctypes.CDLL(dll_path)
         
-        # Setup argument and return types for FFI functions
         self.lib.snek_create.argtypes = []
         self.lib.snek_create.restype = ctypes.c_void_p
         
@@ -96,7 +94,6 @@ class SnekApolloPlayer:
         self.lib.snek_cleanup.argtypes = []
         self.lib.snek_cleanup.restype = None
 
-        # Create the underlying Rust Player instance
         self.ptr = self.lib.snek_create()
         if not self.ptr:
             raise RuntimeError("Failed to create SNEK_Apollo Player")
@@ -172,13 +169,11 @@ class SnekApolloPlayer:
         """
         frame = SnekVideoFrame()
         if self.lib.snek_next_frame(self.ptr, ctypes.byref(frame)):
-            # For 0x00RRGGBB, this is 4 bytes per pixel.
             ArrayType = ctypes.c_uint32 * frame.data_len
             buf = ArrayType.from_address(ctypes.addressof(frame.data.contents))
             return (frame.width, frame.height, bytes(buf), frame.timestamp_ms)
         return None
 
-# --- Example Usage ---
 if __name__ == "__main__":
     print("Initializing SNEK_Apollo FFI wrapper...")
     try:
@@ -226,7 +221,6 @@ if __name__ == "__main__":
                     break
 
                 arr = np.frombuffer(data, dtype=np.uint8).reshape((h, w, 4))
-                # SNEK_Apollo outputs 0x00RRGGBB (little endian: B, G, R, 0)
                 bgr_frame = arr[:, :, :3]
                 
                 cv2.imshow(window_name, bgr_frame)

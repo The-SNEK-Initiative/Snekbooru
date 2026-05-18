@@ -6,6 +6,7 @@ import threading
 import time
 import re
 import inspect
+from types import SimpleNamespace
 import qtawesome as qta
 
 vendor_path = os.path.join(os.path.dirname(__file__), '..', 'vendor')
@@ -14,23 +15,46 @@ sys.path.insert(0, vendor_path)
 import base64
 import cloudscraper
 import requests
+from bs4 import BeautifulSoup
 from multiprocessing import Process, Queue
+from urllib.parse import quote_plus
 try:
     from snekbooru.vendor import hhaven
 except ImportError:
     hhaven = None
-from enma import CloudFlareConfig, Enma, Sources, infra
-from snekbooru.api.ehentai_repo import EHentaiRepo
+try:
+    from enma import CloudFlareConfig, Enma, Sources, infra
+    from enma.application.core.handlers.error import Forbidden
+    ENMA_AVAILABLE = True
+except Exception:
+    CloudFlareConfig = None
+    Enma = None
+    infra = None
+    ENMA_AVAILABLE = False
 
-_original_enma_init = Enma.__init__
-def _patched_enma_init(self, *args, **kwargs):
-    _original_enma_init(self, *args, **kwargs)
-    try:
-        self.source_manager.add_source(Sources.NHENTAI, EHentaiRepo())
-    except Exception as e:
-        print(f"Failed to patch Enma NHENTAI source: {e}")
-Enma.__init__ = _patched_enma_init
-from enma.application.core.handlers.error import Forbidden
+    class Forbidden(Exception):
+        pass
+
+    class _SourcesFallback(list):
+        NHENTAI = "NHENTAI"
+        MANGADEX = "MANGADEX"
+
+    Sources = _SourcesFallback()
+
+try:
+    from snekbooru.api.ehentai_repo import EHentaiRepo
+except Exception:
+    EHentaiRepo = None
+
+if ENMA_AVAILABLE and EHentaiRepo is not None:
+    _original_enma_init = Enma.__init__
+    def _patched_enma_init(self, *args, **kwargs):
+        _original_enma_init(self, *args, **kwargs)
+        try:
+            self.source_manager.add_source(Sources.NHENTAI, EHentaiRepo())
+        except Exception as e:
+            print(f"Failed to patch Enma NHENTAI source: {e}")
+    Enma.__init__ = _patched_enma_init
 from PyQt5.QtCore import (QCoreApplication, QEvent, QPoint, QStringListModel,
                           Qt, QThreadPool, QTimer, pyqtSignal, QThread, QUrl, QStandardPaths)
 from PyQt5.QtGui import (QCursor, QIcon, QKeySequence, QMovie, QPixmap,
@@ -141,6 +165,67 @@ def _mangadex_og_image_from_url(url):
     match = re.search(r"mangadex\.org/title/([0-9a-fA-F-]+)", url)
     if not match: return None
     return f"https://og.mangadex.org/og-image/manga/{match.group(1)}"
+
+def _mangadex_pick_title(attrs):
+    title_map = (attrs or {}).get("title") or {}
+    if isinstance(title_map, dict):
+        for key in ("en", "ja-ro", "ja", "ko", "zh", "es", "fr"):
+            v = title_map.get(key)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        for v in title_map.values():
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+    return None
+
+def _mangadex_cover_from_relationships(manga_id, relationships):
+    for rel in (relationships or []):
+        if isinstance(rel, dict) and rel.get("type") == "cover_art":
+            file_name = (rel.get("attributes") or {}).get("fileName")
+            if file_name:
+                return f"https://uploads.mangadex.org/covers/{manga_id}/{file_name}"
+    return None
+
+def _dict_to_ns(obj):
+    if isinstance(obj, dict):
+        return SimpleNamespace(**{k: _dict_to_ns(v) for k, v in obj.items()})
+    if isinstance(obj, list):
+        return [_dict_to_ns(v) for v in obj]
+    return obj
+
+def _fetch_ehentai_entries(query=None, page=1, limit=50):
+    base_url = "https://e-hentai.org/"
+    scraper = cloudscraper.create_scraper()
+    if query:
+        search_url = f"{base_url}?f_search={quote_plus(query)}&page={max(0, int(page) - 1)}"
+    else:
+        search_url = f"{base_url}?page={max(0, int(page) - 1)}"
+    r = scraper.get(search_url, headers={"User-Agent": USER_AGENT}, timeout=30)
+    r.raise_for_status()
+    soup = BeautifulSoup(r.text, "html.parser")
+    entries = []
+    items = soup.select("table.itg tr") or soup.select("div.gl1t")
+    for item in items:
+        link = item.find("a", href=re.compile(r"/g/\d+/[a-f0-9]+/"))
+        if not link:
+            continue
+        url = link.get("href")
+        gid, token = parse_gallery_id_token(url)
+        title_elem = item.select_one(".glink") or item.select_one(".gl3t")
+        title = title_elem.get_text(strip=True) if title_elem else (url or "")
+        thumb_elem = item.find("img")
+        thumb_url = ""
+        if thumb_elem:
+            thumb_url = thumb_elem.get("src") or thumb_elem.get("data-src") or ""
+        entries.append({
+            "id": f"{gid}/{token}" if gid and token else (url or ""),
+            "url": url,
+            "title": title,
+            "thumbnail": thumb_url,
+        })
+        if len(entries) >= limit:
+            break
+    return entries
 
 def _extract_title_from_value(value):
     if value is None: return None
@@ -473,6 +558,12 @@ class MediaViewerDialog(BaseDialog):
         
         self.cv_video_player = None  
         self.temp_video_file = None
+        self.threadpool = QThreadPool()
+        self.image_pixmap = None
+        self.gif_movie = None
+        self.zoom_factor = 1.0
+        self.cleanup_thread = None
+        self.video_mode_active = False
 
         self.video_controls = QWidget()
         video_controls_layout = QHBoxLayout(self.video_controls)
@@ -571,6 +662,7 @@ class MediaViewerDialog(BaseDialog):
         self.apollo_video_player.download_progress.connect(self.update_download_progress)
         self.apollo_video_player.error.connect(self.on_apollo_error)
         
+        self.load_media()
         self._setup_shortcuts()
 
     def _setup_shortcuts(self):
@@ -641,7 +733,9 @@ class MediaViewerDialog(BaseDialog):
             self._handle_image_load(file_info)
 
     def _stop_current_playback(self):
-        self.apollo_video_player.exit()
+        if self.video_mode_active or self.media_stack.currentWidget() == self.apollo_video_player:
+            self.apollo_video_player.exit()
+        self.video_mode_active = False
         if self.gif_movie: 
             self.gif_movie.stop()
         self.gif_movie = None
@@ -676,6 +770,7 @@ class MediaViewerDialog(BaseDialog):
         }
 
     def _handle_video_load(self, info):
+        self.video_mode_active = True
         self.video_controls.setVisible(True)
         for w in self.zoom_controls: w.setVisible(False)
         
@@ -698,6 +793,7 @@ class MediaViewerDialog(BaseDialog):
                 self.threadpool.start(worker)
 
     def _handle_gif_load(self, info):
+        self.video_mode_active = False
         self.video_controls.setVisible(False)
         for w in self.zoom_controls: w.setVisible(False)
         self.image_label.setText(_tr("Loading GIF..."))
@@ -715,6 +811,7 @@ class MediaViewerDialog(BaseDialog):
             self.threadpool.start(worker)
 
     def _handle_image_load(self, info):
+        self.video_mode_active = False
         self.video_controls.setVisible(False)
         for w in self.zoom_controls: w.setVisible(True)
         self.image_label.setText(_tr("Loading image..."))
@@ -857,6 +954,8 @@ class MediaViewerDialog(BaseDialog):
             self.media_stack.setCurrentWidget(self.image_scroll_area)
 
     def on_apollo_error(self, error_msg):
+        if not self.video_mode_active:
+            return
         self.image_label.setText(_tr("Video Error: {error}").format(error=error_msg))
         self.media_stack.setCurrentWidget(self.image_scroll_area)
         self.video_controls.setVisible(False)
@@ -1029,7 +1128,6 @@ class MediaViewerDialog(BaseDialog):
         if self.gif_movie:
             self.gif_movie.stop()
         
-        self.threadpool.clear() 
         self._cleanup_temp_video(wait_on_close=True)
         
         if self.cleanup_thread and self.cleanup_thread.is_alive():
@@ -1052,6 +1150,14 @@ class SourceFetchThread(QThread):
 
     def run(self):
         try:
+            if not self.parent_app.enma:
+                source_name = getattr(self.source_identifier, "name", str(self.source_identifier))
+                source_meta = {"name": source_name, "query": self.query}
+                entries = self.parent_app._fetch_manga_without_enma(source_name, self.query, self.max_items)
+                self.progress.emit(self.source_identifier, len(entries))
+                self.finished.emit(self.source_identifier, entries[:self.max_items], source_meta, None)
+                return
+
             enma = self.parent_app.enma
 
             enma.source_manager.set_source(self.source_identifier)
@@ -1152,20 +1258,24 @@ class GelDanApp(QWidget):
         self.downloads_data = {}
         self.media_viewer_processes = []
         try:
-            self.enma = Enma()
-            scraper = cloudscraper.create_scraper(browser={"browser": "chrome", "platform": "linux", "mobile": False})
-            try:
-                scraper.headers.update(
-                    {
-                        "User-Agent": USER_AGENT,
-                        "Accept": "*/*",
-                        "Accept-Language": "en-US,en;q=0.9",
-                    }
-                )
-            except Exception:
-                pass
-            self.enma.source_manager.http_client = scraper
-            self._enma_scraper = scraper
+            if ENMA_AVAILABLE and Enma is not None:
+                self.enma = Enma()
+                scraper = cloudscraper.create_scraper(browser={"browser": "chrome", "platform": "linux", "mobile": False})
+                try:
+                    scraper.headers.update(
+                        {
+                            "User-Agent": USER_AGENT,
+                            "Accept": "*/*",
+                            "Accept-Language": "en-US,en;q=0.9",
+                        }
+                    )
+                except Exception:
+                    pass
+                self.enma.source_manager.http_client = scraper
+                self._enma_scraper = scraper
+            else:
+                self.enma = None
+                print("Enma is unavailable in this Python environment. Manga/e-Hentai source features are disabled.")
         except Exception as e:
             print(f"Could not initialize Enma: {e}")
             self.enma = None
@@ -1279,6 +1389,79 @@ class GelDanApp(QWidget):
         ttl = getattr(self, "_temp_cleanup_ttl_seconds", int(SETTINGS.get("temp_cleanup_minutes", 5) or 5) * 60)
         cleanup_snekbooru_temp(ttl)
         self.manga_thumb_cache.clear()
+
+    def _mangadex_request(self, path, params=None, timeout=30):
+        base = "https://api.mangadex.org"
+        r = requests.get(f"{base}{path}", params=params or {}, headers={"User-Agent": USER_AGENT}, timeout=timeout)
+        r.raise_for_status()
+        return r.json()
+
+    def _fetch_mangadex_entries(self, query=None, limit=50):
+        params = {"limit": min(max(int(limit or 50), 1), 100), "offset": 0, "includes[]": ["cover_art"]}
+        if query:
+            params["title"] = query
+            params["order[relevance]"] = "desc"
+        else:
+            params["order[followedCount]"] = "desc"
+        payload = self._mangadex_request("/manga", params=params)
+        entries = []
+        for item in payload.get("data", []) or []:
+            manga_id = item.get("id")
+            attrs = item.get("attributes") or {}
+            title = _mangadex_pick_title(attrs) or manga_id
+            desc_map = attrs.get("description") or {}
+            desc = desc_map.get("en") if isinstance(desc_map, dict) else None
+            cover = _mangadex_cover_from_relationships(manga_id, item.get("relationships"))
+            entries.append({
+                "id": manga_id,
+                "title": title,
+                "url": f"https://mangadex.org/title/{manga_id}",
+                "thumbnail": cover,
+                "description": desc or "",
+            })
+        return entries
+
+    def _fetch_mangadex_chapters_pages(self, manga_id):
+        chapters = []
+        offset = 0
+        while True:
+            params = {
+                "manga": manga_id,
+                "limit": 100,
+                "offset": offset,
+                "order[chapter]": "asc",
+            }
+            payload = self._mangadex_request("/chapter", params=params, timeout=45)
+            rows = payload.get("data", []) or []
+            if not rows:
+                break
+            for row in rows:
+                chap_id = row.get("id")
+                if not chap_id:
+                    continue
+                ch_attrs = row.get("attributes") or {}
+                label = ch_attrs.get("title") or ch_attrs.get("chapter") or ch_attrs.get("volume") or chap_id
+                at_home = self._mangadex_request(f"/at-home/server/{chap_id}", timeout=45)
+                base_url = at_home.get("baseUrl")
+                chapter_obj = at_home.get("chapter") or {}
+                chap_hash = chapter_obj.get("hash")
+                pages = chapter_obj.get("data") or []
+                page_urls = []
+                if base_url and chap_hash:
+                    page_urls = [f"{base_url}/data/{chap_hash}/{name}" for name in pages]
+                chapters.append({"label": str(label), "pages": page_urls})
+            offset += len(rows)
+            if len(rows) < 100:
+                break
+        return chapters
+
+    def _fetch_manga_without_enma(self, source_name, query, max_items):
+        src = str(source_name).upper()
+        if src == "MANGADEX":
+            return self._fetch_mangadex_entries(query=query, limit=max_items)
+        if src in ("NHENTAI", "E-HENTAI", "EHENTAI"):
+            return _fetch_ehentai_entries(query=query, page=1, limit=max_items)
+        return []
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1788,9 +1971,8 @@ class GelDanApp(QWidget):
         self.update_manga_inspector(None)
 
         if not self.enma:
-            QMessageBox.critical(self, "Enma missing", "Enma package not installed or failed to initialize.")
-        else:
-            QTimer.singleShot(100, self.populate_manga_sources)
+            self.manga_status_label.setText(_tr("Enma missing: using MangaDex fallback mode."))
+        QTimer.singleShot(100, self.populate_manga_sources)
 
         return widget
 
@@ -2883,6 +3065,10 @@ class GelDanApp(QWidget):
         entry["_title_fetching"] = True
 
         def work():
+            if not ENMA_AVAILABLE or Enma is None:
+                payload = self._mangadex_request(f"/manga/{manga_id}", params={"includes[]": ["cover_art"]})
+                attrs = (payload.get("data") or {}).get("attributes") or {}
+                return _mangadex_pick_title(attrs) or manga_id
             local_enma = Enma()
             local_enma.source_manager.http_client = cloudscraper.create_scraper()
             local_enma.source_manager.set_source(Sources.MANGADEX)
@@ -2958,6 +3144,22 @@ class GelDanApp(QWidget):
             self.manga_progress.setRange(0, 0)
 
             def work():
+                if not ENMA_AVAILABLE or Enma is None:
+                    chapters = self._fetch_mangadex_chapters_pages(manga_id)
+                    if not chapters:
+                        raise RuntimeError("No chapters found.")
+                    chapter_items = []
+                    chapter_pages = []
+                    for i, ch in enumerate(chapters, start=1):
+                        urls = list(ch.get("pages") or [])
+                        chapter_pages.append(urls)
+                        label = f"Chapter {i}"
+                        if ch.get("label"):
+                            label += f" - {ch['label']}"
+                        if urls:
+                            label += f" ({len(urls)} pages)"
+                        chapter_items.append(label)
+                    return {"chapter_items": chapter_items, "chapter_pages": chapter_pages}, None
                 local_enma = Enma()
                 local_enma.source_manager.http_client = cloudscraper.create_scraper()
                 local_enma.source_manager.set_source(Sources.MANGADEX)
@@ -3082,6 +3284,21 @@ class GelDanApp(QWidget):
             self.manga_progress.setRange(0, 0)
 
             def work():
+                if not ENMA_AVAILABLE or Enma is None:
+                    chapters_data = self._fetch_mangadex_chapters_pages(manga_id)
+                    if not chapters_data:
+                        raise RuntimeError("No chapters found.")
+                    chapter_items = []
+                    chapters = []
+                    for i, ch in enumerate(chapters_data, start=1):
+                        label = f"Chapter {i}"
+                        if ch.get("label"):
+                            label += f" - {ch['label']}"
+                        if ch.get("pages"):
+                            label += f" ({len(ch['pages'])} pages)"
+                        chapter_items.append(label)
+                        chapters.append(_dict_to_ns({"pages": [{"uri": u} for u in (ch.get("pages") or [])]}))
+                    return {"manga": {"id": manga_id}, "chapters": chapters, "chapter_items": chapter_items, "selected_index": 0}, None
                 local_enma = Enma()
                 local_enma.source_manager.http_client = cloudscraper.create_scraper()
                 local_enma.source_manager.set_source(Sources.MANGADEX)
@@ -3278,7 +3495,10 @@ class GelDanApp(QWidget):
 
     def populate_manga_sources(self):
         self.manga_source_list.clear()
-        self.manga_sources = [s for s in Sources if 'manganato' not in str(s).lower()]
+        if ENMA_AVAILABLE and self.enma:
+            self.manga_sources = [s for s in Sources if 'manganato' not in str(s).lower()]
+        else:
+            self.manga_sources = ["MANGADEX", "E-HENTAI"]
         all_item = QListWidgetItem("All")
         all_item.setData(Qt.UserRole, "ALL")
         self.manga_source_list.addItem(all_item)

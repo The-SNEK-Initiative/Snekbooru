@@ -1,7 +1,28 @@
 """HHaven models."""
 import typing
-import pydantic
 from datetime import datetime
+
+try:
+    import pydantic
+except Exception:
+    class _FallbackBaseModel:
+        """
+        Minimal BaseModel fallback for environments where pydantic is unavailable.
+        Keeps hhaven models usable without validation features.
+        """
+        def __init__(self, **data: typing.Any):
+            for cls in reversed(self.__class__.__mro__):
+                annotations = getattr(cls, "__annotations__", {})
+                for field_name in annotations:
+                    if hasattr(cls, field_name):
+                        setattr(self, field_name, getattr(cls, field_name))
+            for key, value in data.items():
+                setattr(self, key, value)
+
+    class _PydanticFallbackModule:
+        BaseModel = _FallbackBaseModel
+
+    pydantic = _PydanticFallbackModule()
 
 __all__ = [
     "HentaiRating",
