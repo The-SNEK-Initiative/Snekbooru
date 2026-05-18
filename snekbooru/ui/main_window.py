@@ -4057,11 +4057,11 @@ class GelDanApp(QWidget):
 
         ui["history_browser"].append("<b>AI:</b><br>")
 
+    def on_ai_chunk_received(self, chunk, chat_index):
         if chat_index == self.ai_chat_tabs.currentIndex():
             ui = self.ai_chat_ui[chat_index]
             cursor = ui["history_browser"].textCursor()
             cursor.movePosition(QTextCursor.End)
-            
             cursor.insertText(chunk)
             ui["history_browser"].moveCursor(QTextCursor.End)
 
@@ -4343,7 +4343,7 @@ Current state of the application:
         self.ai_shared_send_button.setEnabled(True)
         self.ai_shared_input_area.setFocus()
 
-        active_index = self.ai_chat_tabs.currentIndex()
+    def on_ai_error(self, error_message):
         QMessageBox.critical(self, _tr("AI Error"), error_message)
         active_index = self.ai_chat_tabs.currentIndex()
         if active_index >= 0:
@@ -4850,7 +4850,22 @@ Current state of the application:
             self.start_new_search()
 
     def open_selected_full(self):
+        active_tab = self.tabs.currentWidget()
+        if active_tab not in [self.browser_tab, self.favorites_tab, self.downloads_tab]:
+            return
+            
         if self.last_selected:
+            if active_tab == self.browser_tab:
+                if not any(p.get("id") == self.last_selected.get("id") for p in getattr(self, "posts", [])):
+                    return
+            elif active_tab == self.favorites_tab:
+                favs = self.favorites.get(self.current_favorites_category, {})
+                if self.last_selected.get("id") not in favs:
+                    return
+            elif active_tab == self.downloads_tab:
+                if not any(p.get("id") == self.last_selected.get("id") for p in getattr(self, "downloads_posts", [])):
+                    return
+                    
             self.open_post_full(self.last_selected)
 
     def on_random_tag_loaded(self, post, err):
