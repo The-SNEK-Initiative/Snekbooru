@@ -6,6 +6,8 @@
 ### This README is still maintained, however it is recommended
 that you go to https://snekbooru.org/ for more information regarding this project. (Usually a few hours/days behind on updates however)
 
+# We are aware of current problems in version 6.0.1-fix involving Gelbooru images not loading. This will be adressed in version 6.0.2 releasing shortly along with a 1.0.0 Linux CLI release.
+
 # Snekbooru
 ### Finally common sourced!
 ## Disclaimers
