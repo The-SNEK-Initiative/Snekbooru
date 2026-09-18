@@ -29,6 +29,7 @@ def launch_media_viewer_process(posts, current_index, favorites, settings, queue
             self.styleSheet = lambda: ""
             self.toggle_favorite = lambda post: queue.put(('favorited', post))
             self.download_post = lambda post: download_media(post)
+            self.report_view = lambda post, dwell: queue.put(('viewed', (post, dwell)))
 
     mock_parent = MockParent()
 

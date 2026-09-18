@@ -19,10 +19,6 @@ from bs4 import BeautifulSoup
 from multiprocessing import Process, Queue
 from urllib.parse import quote_plus
 try:
-    from snekbooru.vendor import hhaven
-except ImportError:
-    hhaven = None
-try:
     from enma import CloudFlareConfig, Enma, Sources, infra
     from enma.application.core.handlers.error import Forbidden
     ENMA_AVAILABLE = True
@@ -69,16 +65,23 @@ from PyQt5.QtWidgets import (QApplication, QCheckBox, QComboBox, QCompleter,
                              QSlider, QShortcut, QKeySequenceEdit)
 from PyQt5.QtCore import QBuffer, QByteArray, QIODevice
 import webbrowser, traceback
-from PyQt5.QtWebEngineWidgets import QWebEnginePage, QWebEngineProfile, QWebEngineView, QWebEngineScript
-from PyQt5.QtWebEngineWidgets import QWebEngineSettings
 from PyQt5.QtWidgets import QDesktopWidget
+
+_webengine_imported = False
+def _ensure_webengine():
+    global _webengine_imported, QWebEnginePage, QWebEngineProfile, QWebEngineView, QWebEngineScript, QWebEngineSettings
+    if not _webengine_imported:
+        from PyQt5.QtWebEngineWidgets import QWebEnginePage, QWebEngineProfile, QWebEngineView, QWebEngineScript
+        from PyQt5.QtWebEngineWidgets import QWebEngineSettings
+        _webengine_imported = True
+
 from snekbooru.api.ehentai_utils import download_gallery_pages, parse_gallery_id_token
 from snekbooru.api.booru import (gelbooru_posts, danbooru_post_count, danbooru_random,
                                  fetch_multiple_sources,
                                  suggest_all_tags)
 from snekbooru.api.utils import scrape_post_count
 from snekbooru.common.constants import USER_AGENT
-from snekbooru.common.helpers import get_file_hash, get_resource_path
+from snekbooru.common.helpers import get_file_hash, get_media_headers, get_resource_path
 from snekbooru.common.translations import _tr
 from snekbooru.core.config import (SETTINGS, find_post_in_favorites,
                                    load_custom_boorus, load_downloads_data,
@@ -88,6 +91,11 @@ from snekbooru.core.config import (SETTINGS, find_post_in_favorites,
                                    save_highscores, save_search_history,
                                    save_settings, save_tag_profile) # noqa: E501
 from snekbooru.core.manga_utils import normalize_http_url, resolve_manga_url
+from snekbooru.core.persona import (empty_profile, load_profile as load_persona,
+                                    _derive_source as _persona_source,
+                                    record_download, record_hentai_open,
+                                    record_manga_open, record_post_open, record_search,
+                                    save_profile as save_persona, top_affinity_tags)
 from snekbooru.core.book_export import (cleanup_images_folder, export_epub_from_images,
                                         export_mobi_from_images, export_pdf_from_images,
                                         export_png_zip_from_images, list_image_files)
@@ -95,13 +103,15 @@ from snekbooru.core.temp_cache import cleanup_snekbooru_temp, snekbooru_temp_dir
 from snekbooru.core.workers import (AIStreamWorker, ApiWorker, AsyncApiWorker, ImageWorker,
                                     RecommendationFetcher)
 from snekbooru.ui.dialogs import (BaseDialog, BulkDownloadDialog,
-                                  BookExportDialog, MangaBookDialog, MangaDownloadExportDialog, HentaiSeriesDialog, HentaiViewerDialog, SettingsDialog)
+                                  BookExportDialog, HentaiSeriesDialog,
+                                  HentaiVideoPreviewDialog, HentaiViewerDialog, MangaBookDialog, MangaDownloadExportDialog, SettingsDialog)
 from snekbooru.ui.styling import (DARK_STYLESHEET, INCOGNITO_STYLESHEET,
                                   LIGHT_STYLESHEET, get_fonts_path,
                                   load_custom_themes, preprocess_stylesheet)
 from snekbooru.ui.apollo_player import ApolloVideoPlayer
 from snekbooru.ui.minigames import (PostShowdownGame, ImageScrambleGame, TagGuesserGame)
-from snekbooru.ui.widgets import (AdBlocker, ImageDropLabel, MangaListItem, ThumbnailWidget)
+from snekbooru.ui.widgets import (AdBlocker, HentaiThumbnailWidget,
+                                  ImageDropLabel, MangaListItem, ThumbnailWidget)
 def probe_entries_from_result(result):
     if result is None: return []
     if isinstance(result, (list, tuple)): return list(result)
@@ -154,11 +164,14 @@ def _call_search_fn(search_fn, query, page):
     return search_fn(query, page)
 
 
-class MangaWebPage(QWebEnginePage):
-    def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
-        if isinstance(message, str) and "Unrecognized feature: 'cross-origin-isolated'" in message:
-            return
-        return super().javaScriptConsoleMessage(level, message, lineNumber, sourceID)
+def MangaWebPage(*args, **kwargs):
+    _ensure_webengine()
+    class _MangaWebPage(QWebEnginePage):
+        def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
+            if isinstance(message, str) and "Unrecognized feature: 'cross-origin-isolated'" in message:
+                return
+            return super().javaScriptConsoleMessage(level, message, lineNumber, sourceID)
+    return _MangaWebPage(*args, **kwargs)
 
 def _mangadex_og_image_from_url(url):
     if not isinstance(url, str): return None
@@ -385,6 +398,10 @@ def detect_source_from_query(query: str) -> list:
         "yandere": ["yan", "yandere"],
         "rule34": ["rule34", "rule 34"],
         "hypnohub": ["hypno", "hypnohub"],
+        "xbooru": ["xbooru", "x booru"],
+        "safebooru": ["safebooru", "safe booru"],
+        "szurubooru": ["szurubooru", "szuru"],
+        "mikubooru": ["mikubooru", "miku booru", "booru.funmaker"],
     }
     
     detected_sources = []
@@ -397,57 +414,108 @@ def detect_source_from_query(query: str) -> list:
     
     return detected_sources
 
-async def _do_hhaven_search(query: str) -> list:
-    import asyncio
-    client = hhaven.Client()
+def _hhaven_get(path, params=None, quiet=False):
     try:
-        await client.build()
-        results = await client.search(query)
-        full_hentai_objects = await asyncio.gather(*[h.full() for h in results])
-        return full_hentai_objects
-    finally:
-        await client.close()
+        resp = requests.get("https://cms.hentaihaven.xxx/wp-json" + path,
+                            params=params,
+                            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+                            timeout=25)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.HTTPError as e:
+        if not quiet and e.response is not None and e.response.status_code not in (400, 404):
+            print(f"hhaven {path} error: {e}")
+        return None
+    except Exception as e:
+        if not quiet:
+            print(f"hhaven {path} error: {e}")
+        return None
 
-async def _do_hhaven_random(count=12) -> list:
-    import random
-    import asyncio
-    client = hhaven.Client()
+HHAVEN_SERIES_FIELDS = "id,slug,title,date,link,meta,wp-manga-genre,wp-manga-tag"
+_HH_GENRE_NAMES = {}
+
+def _hhaven_thumb(path_or_url):
+    if not path_or_url:
+        return ""
+    if path_or_url.startswith("http://"):
+        return "https://" + path_or_url[len("http://"):]
+    if path_or_url.startswith("https://"):
+        return path_or_url
+    return f"https://img.hentaihaven.xxx/{path_or_url.lstrip('/')}"
+
+def _do_hhaven_fetch(mode, page=0, per_page=24, query="", genre_id=0, slug=""):
     try:
-        await client.build()
-        home_page = await client.home()
-        if not home_page.last:
-            return []
-        
-        sample_size = min(count, len(home_page.last))
-        random_partials = random.sample(home_page.last, sample_size)
-        full_hentai_objects = await asyncio.gather(*[h.full() for h in random_partials])
-        return full_hentai_objects
-    finally:
-        await client.close()
+        if mode == "search":
+            data = _hhaven_get("/wp/v2/wp-manga", params={
+                "search": query, "per_page": per_page, "page": page + 1,
+                "orderby": "relevance", "_fields": HHAVEN_SERIES_FIELDS}, quiet=True)
+            return data or []
+        if mode == "new":
+            data = _hhaven_get("/wp/v2/wp-manga", params={
+                "per_page": per_page, "page": page + 1, "orderby": "date",
+                "order": "desc", "_fields": HHAVEN_SERIES_FIELDS})
+            return data or []
+        if mode == "genre":
+            data = _hhaven_get("/wp/v2/wp-manga", params={
+                "wp-manga-genre": genre_id, "per_page": per_page, "page": page + 1,
+                "orderby": "date", "order": "desc", "_fields": HHAVEN_SERIES_FIELDS})
+            return data or []
+        if mode == "trending":
+            data = _hhaven_get("/hhaven/v1/catalog/trending", params={"period": "month"})
+            items = (data or {}).get("items", [])
+            return items[page * per_page:(page + 1) * per_page]
+        if mode == "popular":
+            data = _hhaven_get("/hhaven/v1/catalog/ranked", params={"period": "all-time"})
+            items = (data or {}).get("items", [])
+            return items[page * per_page:(page + 1) * per_page]
+        if mode == "random":
+            return _do_hhaven_random(per_page)
+        if mode == "genres":
+            data = _hhaven_get("/hhaven/v1/genres")
+            items = (data or {}).get("items", [])
+            _HH_GENRE_NAMES.clear()
+            for it in items if isinstance(items, list) else []:
+                gid = it.get("id")
+                if gid:
+                    _HH_GENRE_NAMES[int(gid)] = it.get("name") or it.get("slug") or ""
+            return items
+        if mode == "episodes":
+            data = _hhaven_get(f"/hhaven/v1/manga/by-slug/{slug}/chapters")
+            return data or []
+        if mode == "detail":
+            data = _hhaven_get("/wp/v2/wp-manga", params={
+                "slug": slug, "per_page": 1,
+                "_fields": "id,slug,title,date,content,meta,wp-manga-genre,wp-manga-tag"})
+            if isinstance(data, list) and data:
+                return data[0]
+            return data if isinstance(data, dict) else {}
+    except Exception as e:
+        print(f"hhaven fetch {mode} error: {e}")
+        return []
+    return []
 
-async def _get_hhaven_stream_url(episode: 'hhaven.PartialHentaiEpisode') -> str:
-    client = hhaven.Client()
+def _do_hhaven_random(page_size=24):
     try:
-        await client.build()
-        full_episode = await client.get_episode(episode.id, episode.hentai_id)
-        return full_episode.content
-    finally:
-        await client.close()
-
-async def _scrape_hhaven_series_page(hentai_obj: 'hhaven.Hentai') -> dict:
-    episodes = []
-    for episode in hentai_obj.episodes:
-        episodes.append({
-            'title': episode.name,
-            'url': None, 
-            'episode_obj': episode
-        })
-
-    return {
-        "title": hentai_obj.title,
-        "description": hentai_obj.description,
-        "episodes": episodes
-    }
+        head = requests.get("https://cms.hentaihaven.xxx/wp-json/wp/v2/wp-manga",
+                            params={"per_page": 1, "page": 1, "_fields": "id"},
+                            headers={"User-Agent": USER_AGENT}, timeout=20)
+        total = 1
+        try:
+            total = int(head.headers.get("X-WP-Total", 1))
+        except Exception:
+            pass
+        pages = max(1, min(5000, (total + page_size - 1) // page_size))
+        rand_page = random.randint(1, pages)
+        data = _hhaven_get("/wp/v2/wp-manga", params={
+            "per_page": page_size, "page": rand_page, "orderby": "date",
+            "order": "desc", "_fields": HHAVEN_SERIES_FIELDS})
+        if isinstance(data, list) and data:
+            random.shuffle(data)
+            return data[:page_size]
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        print(f"hhaven random error: {e}")
+        return []
 
 class ChatBrowser(QTextBrowser):
     def setSource(self, name):
@@ -531,6 +599,7 @@ class MediaViewerDialog(BaseDialog):
         self.posts_list = posts_list
         self.current_index = current_index
         self.post = self.posts_list[self.current_index]
+        self._view_started_at = time.time()
 
         self.setMinimumSize(800, 600)
         self.setStyleSheet(parent.styleSheet() if parent else "")
@@ -732,6 +801,20 @@ class MediaViewerDialog(BaseDialog):
         else:
             self._handle_image_load(file_info)
 
+    def _report_current_view(self):
+        if getattr(self, '_view_started_at', None) is None:
+            return
+        elapsed = time.time() - self._view_started_at
+        self._view_started_at = time.time()
+        if elapsed < 1.0:
+            return
+        report = getattr(self.parent_app, 'report_view', None)
+        if callable(report):
+            try:
+                report(self.post, elapsed)
+            except Exception as e:
+                print(f"Error reporting view: {e}")
+
     def _stop_current_playback(self):
         if self.video_mode_active or self.media_stack.currentWidget() == self.apollo_video_player:
             self.apollo_video_player.exit()
@@ -825,6 +908,8 @@ class MediaViewerDialog(BaseDialog):
             self.threadpool.start(worker)
 
     def on_image_loaded(self, pixmap, post):
+        if post is not None and self.post is not None and post.get("id") != self.post.get("id"):
+            return
         self.image_pixmap = pixmap
         if not pixmap.isNull():
             self.fit_image_to_window()
@@ -843,7 +928,7 @@ class MediaViewerDialog(BaseDialog):
                 if local_path and os.path.exists(local_path):
                     with open(local_path, "rb") as f:
                         return f.read(), None
-            r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
+            r = requests.get(url, headers=get_media_headers(url), timeout=30)
             r.raise_for_status()
             return r.content, None
         except Exception as e:
@@ -875,13 +960,10 @@ class MediaViewerDialog(BaseDialog):
             try:
                 if isinstance(url, str):
                     url = normalize_http_url(url).replace("\\", "/")
-                headers = {'User-Agent': USER_AGENT}
-                if isinstance(url, str) and "gelbooru" in url:
-                    headers["Referer"] = "https://gelbooru.com/"
                 response = requests.get(
                     url, 
                     timeout=300, 
-                    headers=headers, 
+                    headers=get_media_headers(url), 
                     stream=True
                 )
                 if response.status_code == 200:
@@ -1020,6 +1102,7 @@ class MediaViewerDialog(BaseDialog):
                 self.cleanup_thread = thread
 
     def prev_media(self):
+        self._report_current_view()
         self.apollo_video_player.exit()
         if self.gif_movie: self.gif_movie.stop()
         self._cleanup_temp_video()
@@ -1029,6 +1112,7 @@ class MediaViewerDialog(BaseDialog):
             self.load_media()
 
     def next_media(self):
+        self._report_current_view()
         self.apollo_video_player.exit()
         if self.gif_movie: self.gif_movie.stop()
         self._cleanup_temp_video()
@@ -1120,6 +1204,7 @@ class MediaViewerDialog(BaseDialog):
             self.fit_image_to_window()
 
     def closeEvent(self, event):
+        self._report_current_view()
         try:
             pass
         except Exception:
@@ -1221,6 +1306,220 @@ class SourceFetchThread(QThread):
             self.finished.emit(self.source_identifier, [], {}, {"exception": str(e), "trace": tb})
 
 
+class ChatBubble(QFrame):
+    edit_requested = pyqtSignal(object)
+    retry_requested = pyqtSignal(object)
+
+    def __init__(self, text="", is_user=False, parent=None, msg_index=-1):
+        super().__init__(parent)
+        self.is_user = is_user
+        self.msg_index = msg_index
+        self.setObjectName("chat_bubble")
+        self.setFrameShape(QFrame.NoFrame)
+        self.setStyleSheet("QFrame#chat_bubble { background: transparent; }")
+
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(1)
+
+        self.row = QHBoxLayout()
+        self.row.setContentsMargins(0, 1, 0, 1)
+
+        self.bubble = QFrame()
+        self.bubble.setObjectName("bubble_inner")
+        if is_user:
+            self.bubble.setStyleSheet(
+                "QFrame#bubble_inner { background: #2563eb; border-radius: 14px; "
+                "border-bottom-right-radius: 4px; padding: 8px 10px; }"
+            )
+        else:
+            self.bubble.setStyleSheet(
+                "QFrame#bubble_inner { background: #1e293b; border-radius: 14px; "
+                "border-bottom-left-radius: 4px; padding: 8px 10px; }"
+            )
+        screen_w = QApplication.primaryScreen().size().width()
+        self.bubble.setMaximumWidth(int(screen_w * 0.5))
+
+        self.bubble_layout = QVBoxLayout(self.bubble)
+        self.bubble_layout.setContentsMargins(0, 0, 0, 0)
+        self.bubble_layout.setSpacing(0)
+
+        self.text_label = QLabel(text)
+        self.text_label.setWordWrap(True)
+        self.text_label.setTextFormat(Qt.RichText)
+        self.text_label.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        self.text_label.setOpenExternalLinks(False)
+        self.text_label.setStyleSheet(
+            "QLabel { background: transparent; color: %s; border: none; }" % (
+                "#fff" if is_user else "#e2e8f0"
+            )
+        )
+        self.text_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.bubble_layout.addWidget(self.text_label)
+
+        if is_user:
+            self.row.addStretch()
+            self.row.addWidget(self.bubble)
+        else:
+            self.row.addWidget(self.bubble)
+            self.row.addStretch()
+
+        self.main_layout.addLayout(self.row)
+
+        self.btn_row = QHBoxLayout()
+        self.btn_row.setContentsMargins(0, 0, 0, 0)
+        self.btn_row.setSpacing(0)
+
+        if is_user:
+            self.btn_row.addStretch()
+            self.edit_btn = QToolButton()
+            self.edit_btn.setIcon(qta.icon('fa5s.pencil-alt', color='#94a3b8'))
+            self.edit_btn.setAutoRaise(True)
+            self.edit_btn.setToolTip(_tr("Edit"))
+            self.edit_btn.setStyleSheet("QToolButton { border: none; background: transparent; padding: 2px; }")
+            self.edit_btn.clicked.connect(lambda: self.edit_requested.emit(self))
+            self.btn_row.addWidget(self.edit_btn)
+
+            self.retry_btn = QToolButton()
+            self.retry_btn.setIcon(qta.icon('fa5s.redo', color='#94a3b8'))
+            self.retry_btn.setAutoRaise(True)
+            self.retry_btn.setToolTip(_tr("Retry"))
+            self.retry_btn.setStyleSheet("QToolButton { border: none; background: transparent; padding: 2px; }")
+            self.retry_btn.clicked.connect(lambda: self.retry_requested.emit(self))
+            self.btn_row.addWidget(self.retry_btn)
+
+        self.main_layout.addLayout(self.btn_row)
+
+    def _icon_color(self):
+        try:
+            w = self.window()
+            if w:
+                bg = w.palette().color(w.backgroundRole())
+                lum = (0.299 * bg.red() + 0.587 * bg.green() + 0.114 * bg.blue()) / 255.0
+                return '#ffffff' if lum < 0.5 else '#000000'
+        except Exception:
+            pass
+        return '#94a3b8'
+
+    def set_text(self, text):
+        self.text_label.setText(text)
+
+    def append_text(self, chunk):
+        self.text_label.setText(self.text_label.text() + chunk)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.RightButton:
+            menu = QMenu(self)
+            if self.is_user:
+                edit_action = menu.addAction(qta.icon('fa5s.pencil-alt'), _tr("Edit"))
+                edit_action.triggered.connect(lambda: self.edit_requested.emit(self))
+            else:
+                retry_action = menu.addAction(qta.icon('fa5s.redo'), _tr("Retry"))
+                retry_action.triggered.connect(lambda: self.retry_requested.emit(self))
+            menu.exec_(event.globalPos())
+        super().mousePressEvent(event)
+
+
+class ChatImageBubble(QFrame):
+    clicked = pyqtSignal(object)
+
+    def __init__(self, pixmap, post, parent=None):
+        super().__init__(parent)
+        self.post = post
+        self.setFrameShape(QFrame.NoFrame)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setStyleSheet("QFrame { background: transparent; }")
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 1, 0, 1)
+
+        screen_h = QApplication.primaryScreen().size().height()
+        max_h = int(screen_h * 0.28)
+        scaled = pixmap.scaledToHeight(min(max_h, pixmap.height()), Qt.SmoothTransformation)
+
+        self.img_label = QLabel()
+        self.img_label.setPixmap(scaled)
+        self.img_label.setCursor(Qt.PointingHandCursor)
+        self.img_label.setStyleSheet("QLabel { border-radius: 8px; background: transparent; }")
+        layout.addWidget(self.img_label)
+        layout.addStretch()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self.post)
+        super().mousePressEvent(event)
+
+
+class ChatRefCard(QFrame):
+    clicked = pyqtSignal(object)
+
+    def __init__(self, title, pixmap, ref_data, parent=None):
+        super().__init__(parent)
+        self.ref_data = ref_data
+        self.setFrameShape(QFrame.NoFrame)
+        self.setCursor(Qt.PointingHandCursor)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 2, 0, 2)
+        layout.setSpacing(8)
+
+        self.img_label = QLabel()
+        if pixmap and not pixmap.isNull():
+            scaled = pixmap.scaledToHeight(60, Qt.SmoothTransformation)
+            self.img_label.setPixmap(scaled)
+        else:
+            self.img_label.setFixedSize(80, 60)
+            self.img_label.setText("N/A")
+            self.img_label.setAlignment(Qt.AlignCenter)
+        self.img_label.setStyleSheet("background: #333; border-radius: 4px;")
+        layout.addWidget(self.img_label)
+
+        text_layout = QVBoxLayout()
+        title_lbl = QLabel(f"<b>{title[:80]}</b>")
+        title_lbl.setWordWrap(True)
+        title_lbl.setTextFormat(Qt.RichText)
+        text_layout.addWidget(title_lbl)
+        subtitle = ref_data.get("type", "").title()
+        if subtitle:
+            cat = QLabel(subtitle)
+            cat.setStyleSheet("color: #888; font-size: 10px;")
+            text_layout.addWidget(cat)
+        text_layout.addStretch()
+        layout.addLayout(text_layout, 1)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self.ref_data)
+        super().mousePressEvent(event)
+
+
+class ChatMessageList(QScrollArea):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        self.container = QWidget()
+        self.layout = QVBoxLayout(self.container)
+        self.layout.setAlignment(Qt.AlignTop)
+        self.layout.setContentsMargins(8, 8, 8, 8)
+        self.layout.setSpacing(4)
+        self.layout.addStretch()
+        self.setWidget(self.container)
+
+        self.bubbles = []
+
+    def add_bubble(self, bubble):
+        self.layout.insertWidget(self.layout.count() - 1, bubble)
+        self.bubbles.append(bubble)
+        QTimer.singleShot(50, self._scroll_bottom)
+
+    def _scroll_bottom(self):
+        sb = self.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+
 class GelDanApp(QWidget):
     def __init__(self, is_incognito=False):
         super().__init__()
@@ -1243,6 +1542,7 @@ class GelDanApp(QWidget):
         self.post_to_widget_map = {}
         self.id_to_post_map = {}
         self.tag_profile = load_tag_profile()
+        self.persona = empty_profile() if is_incognito else load_persona()
         self.favorites = load_favorites()
         self.custom_boorus = load_custom_boorus()
         self.search_history = load_search_history()
@@ -1275,7 +1575,8 @@ class GelDanApp(QWidget):
                 self._enma_scraper = scraper
             else:
                 self.enma = None
-                print("Enma is unavailable in this Python environment. Manga/e-Hentai source features are disabled.")
+                # print("Enma is unavailable in this Python environment. Manga/e-Hentai source features are disabled.")
+                print("Stale Enma, don't worry about this warning.")
         except Exception as e:
             print(f"Could not initialize Enma: {e}")
             self.enma = None
@@ -1660,6 +1961,14 @@ class GelDanApp(QWidget):
                     self.send_ai_message()
                 except Exception as e:
                     QMessageBox.warning(self, _tr("Error"), _tr("Could not send message: {error}").format(error=str(e)))
+                return True
+
+        if event.type() == QEvent.KeyPress and hasattr(source, '_is_ai_edit') and source._is_ai_edit:
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not (event.modifiers() & Qt.ShiftModifier):
+                source._save_callback()
+                return True
+            if event.key() == Qt.Key_Escape:
+                source._cancel_callback()
                 return True 
 
         if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter):
@@ -1777,9 +2086,41 @@ class GelDanApp(QWidget):
                 message_type, data = self.media_viewer_queue.get_nowait()
                 if message_type == 'favorited':
                     self.toggle_favorite(data)
+                elif message_type == 'viewed':
+                    post, dwell = data
+                    self._record_persona_view(post, dwell)
             except Exception as e:
                 print(f"Error processing media viewer queue: {e}")
                 break
+
+    def _record_persona_view(self, post, dwell=0.0):
+        if not post or not hasattr(self, 'persona') or self.persona is None:
+            return
+        if getattr(self, 'is_incognito_window', False):
+            return
+        try:
+            category = find_post_in_favorites(post.get('id'), self.favorites)
+            record_post_open(self.persona, post, context='viewer', category=category, dwell=dwell)
+        except Exception as e:
+            print(f"Error recording persona: {e}")
+        self._schedule_persona_save()
+
+    def _schedule_persona_save(self):
+        if getattr(self, 'is_incognito_window', False):
+            return
+        try:
+            QTimer.singleShot(2500, self._flush_persona)
+        except Exception:
+            pass
+
+    def _flush_persona(self):
+        if getattr(self, 'is_incognito_window', False):
+            return
+        try:
+            if getattr(self, 'persona', None) is not None:
+                save_persona(self.persona)
+        except Exception as e:
+            print(f"Error saving persona: {e}")
 
     def create_home_tab(self):
         widget = QWidget()
@@ -1942,6 +2283,7 @@ class GelDanApp(QWidget):
         inspector_layout.addLayout(inspector_buttons)
         details_layout.addWidget(inspector_group)
 
+        _ensure_webengine()
         self.manga_profile = QWebEngineProfile()
         self.manga_profile.setHttpUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
         try:
@@ -1980,27 +2322,43 @@ class GelDanApp(QWidget):
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
-        if not hhaven:
-            label = QLabel(_tr("<h2>Hentai Haven integration requires the 'aiocache' library.</h2>"
-                               "<p>Please install it by running: <b>pip install aiocache</b></p>"))
-            label.setAlignment(Qt.AlignCenter)
-            label.setOpenExternalLinks(True)
-            layout.addWidget(label)
-            return widget
-
-        controls_group = QGroupBox(_tr("Search Hentai Haven"))
-        controls_layout = QHBoxLayout(controls_group)
+        controls_group = QGroupBox(_tr("HentaiHaven"))
+        controls_layout = QVBoxLayout(controls_group)
+        row1 = QHBoxLayout()
         self.hentai_search_input = QLineEdit()
-        self.hentai_search_input.setPlaceholderText(_tr("Search for tags, title, etc..."))
+        self.hentai_search_input.setPlaceholderText(_tr("Search series by title or tag…"))
         self.hentai_search_input.returnPressed.connect(self.search_hentai)
         self.hentai_search_btn = QPushButton(qta.icon('fa5s.search'), _tr(" Search"))
         self.hentai_search_btn.clicked.connect(self.search_hentai)
-        self.hentai_random_btn = QPushButton(qta.icon('fa5s.random'), _tr(" Random"))
-        self.hentai_random_btn.clicked.connect(self.random_hentai)
+        row1.addWidget(self.hentai_search_input, 1)
+        row1.addWidget(self.hentai_search_btn)
+        controls_layout.addLayout(row1)
 
-        controls_layout.addWidget(self.hentai_search_input)
-        controls_layout.addWidget(self.hentai_search_btn)
-        controls_layout.addWidget(self.hentai_random_btn)
+        row2 = QHBoxLayout()
+        self.hentai_trending_btn = QPushButton(qta.icon('fa5s.fire'), _tr(" Trending"))
+        self.hentai_trending_btn.clicked.connect(self.trending_hentai)
+        self.hentai_popular_btn = QPushButton(qta.icon('fa5s.chart-line'), _tr(" Popular"))
+        self.hentai_popular_btn.clicked.connect(self.popular_hentai)
+        self.hentai_new_btn = QPushButton(qta.icon('fa5s.clock'), _tr(" New"))
+        self.hentai_new_btn.clicked.connect(self.newest_hentai)
+        self.hentai_random_btn = QPushButton(qta.icon('fa5s.dice'), _tr(" Random"))
+        self.hentai_random_btn.clicked.connect(self.random_hentai)
+        self.hentai_load_more_btn = QPushButton(qta.icon('fa5s.plus-circle'), _tr(" Load More"))
+        self.hentai_load_more_btn.clicked.connect(self.load_more_hentai)
+        self.hentai_load_more_btn.setEnabled(False)
+        row2.addWidget(self.hentai_trending_btn)
+        row2.addWidget(self.hentai_popular_btn)
+        row2.addWidget(self.hentai_new_btn)
+        row2.addWidget(self.hentai_random_btn)
+        row2.addWidget(self.hentai_load_more_btn)
+        row2.addSpacing(12)
+        row2.addWidget(QLabel(_tr("Genre:")))
+        self.hentai_genre_combo = QComboBox()
+        self.hentai_genre_combo.setMinimumWidth(180)
+        self.hentai_genre_combo.currentIndexChanged.connect(self.on_hentai_genre_changed)
+        row2.addWidget(self.hentai_genre_combo)
+        row2.addStretch(1)
+        controls_layout.addLayout(row2)
         layout.addWidget(controls_group)
 
         self.hentai_scroll = QScrollArea(); self.hentai_scroll.setWidgetResizable(True)
@@ -2018,65 +2376,210 @@ class GelDanApp(QWidget):
         layout.addLayout(status_layout)
 
         self.hentai_post_to_widget_map = {}
+        self.hentai_current_results = []
+        self.hentai_current_page = 0
+        self.hentai_current_query = ""
+        self.hentai_current_mode = "new"
+        self.hentai_page_size = 24
 
+        QTimer.singleShot(0, self.load_hhaven_genres)
+        QTimer.singleShot(0, self.newest_hentai)
         return widget
+
+    def _start_hentai_fetch(self, append=False):
+        mode = self.hentai_current_mode
+        query = self.hentai_current_query if mode == "search" else ""
+        genre_id = 0
+        if mode == "genre" and getattr(self, "hentai_genre_combo", None):
+            idx = self.hentai_genre_combo.currentIndex()
+            genre_id = int(self.hentai_genre_combo.itemData(idx) or 0)
+        self.hentai_status_label.setText(_tr("Loading…"))
+        self.hentai_load_more_btn.setEnabled(False)
+        worker = ApiWorker(_do_hhaven_fetch, mode, self.hentai_current_page,
+                           self.hentai_page_size, query, genre_id)
+        worker.signals.finished.connect(self.on_hentai_more_loaded if append else self.on_hentai_search_finished)
+        self.threadpool.start(worker)
 
     def search_hentai(self):
         query = self.hentai_search_input.text().strip()
         if not query: return
-        self.hentai_status_label.setText(_tr("Searching..."))
-        worker = AsyncApiWorker(_do_hhaven_search, query)
+        self.hentai_current_query = query
+        self.hentai_current_mode = "search"
+        self.hentai_current_page = 0
+        self._start_hentai_fetch(append=False)
+
+    def random_hentai(self):
+        self.hentai_current_mode = "random"
+        self.hentai_current_page = 0
+        self.hentai_status_label.setText(_tr("Fetching random…"))
+        self.hentai_load_more_btn.setEnabled(False)
+        worker = ApiWorker(_do_hhaven_fetch, "random", 0, self.hentai_page_size)
         worker.signals.finished.connect(self.on_hentai_search_finished)
         self.threadpool.start(worker)
 
-    def random_hentai(self):
-        self.hentai_status_label.setText(_tr("Fetching random video..."))
-        worker = AsyncApiWorker(_do_hhaven_random)
-        worker.signals.finished.connect(self.on_hentai_search_finished)
+    def trending_hentai(self):
+        self.hentai_current_mode = "trending"
+        self.hentai_current_page = 0
+        self._start_hentai_fetch(append=False)
+
+    def popular_hentai(self):
+        self.hentai_current_mode = "popular"
+        self.hentai_current_page = 0
+        self._start_hentai_fetch(append=False)
+
+    def newest_hentai(self):
+        self.hentai_current_mode = "new"
+        self.hentai_current_page = 0
+        self._start_hentai_fetch(append=False)
+
+    def load_more_hentai(self):
+        if self.hentai_current_mode == "random":
+            self.random_hentai()
+            return
+        self.hentai_current_page += 1
+        self._start_hentai_fetch(append=True)
+
+    def load_hhaven_genres(self):
+        worker = ApiWorker(_do_hhaven_fetch, "genres", 0, 0)
+        worker.signals.finished.connect(self.on_hhaven_genres_loaded)
         self.threadpool.start(worker)
+
+    def on_hhaven_genres_loaded(self, results, err):
+        combo = getattr(self, "hentai_genre_combo", None)
+        if combo is None: return
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(_tr("All Genres"), 0)
+        for g in (results or []):
+            combo.addItem(f"{g.get('name') or g.get('slug') or g.get('id')}  ({g.get('count') or 0})", int(g.get('id') or 0))
+        combo.blockSignals(False)
+        combo.setCurrentIndex(0)
+
+    def on_hentai_genre_changed(self):
+        combo = getattr(self, "hentai_genre_combo", None)
+        if combo is None or len(combo) == 0:
+            return
+        idx = combo.currentIndex()
+        gid = int(combo.itemData(idx) or 0)
+        if gid == 0:
+            self.newest_hentai()
+        else:
+            self.hentai_current_mode = "genre"
+            self.hentai_current_page = 0
+            self.hentai_current_query = ""
+            self._start_hentai_fetch(append=False)
 
     def on_hentai_search_finished(self, results, err):
         self.clear_grid(self.hentai_grid)
         self.hentai_post_to_widget_map.clear()
         if err:
             self.hentai_status_label.setText(_tr("Error: {error}").format(error=err))
-            QMessageBox.critical(self, _tr("Hentai Haven Error"), err)
+            self.hentai_load_more_btn.setEnabled(False)
             return
-        
-        posts = [self._adapt_hhaven_to_post(h) for h in results]
+
+        posts = [p for p in (self._adapt_hhaven_post(h) for h in (results or [])) if p][:150]
+        self.hentai_current_results = posts
         if not posts:
             self.hentai_status_label.setText(_tr("No results found."))
+            self.hentai_load_more_btn.setEnabled(False)
         else:
-            self.hentai_status_label.setText(_tr("Loaded {count} results.").format(count=len(posts)))
+            self.hentai_status_label.setText(_tr("Loaded {count} series.").format(count=len(posts)))
+            self.hentai_load_more_btn.setEnabled(len(posts) >= self.hentai_page_size)
+        self._populate_hentai_grid(posts)
 
-        self.populate_grid(self.hentai_grid, posts, self.hentai_post_to_widget_map, self.on_hentai_thumbnail_clicked, viewport_width=self.hentai_scroll.viewport().width())
+    def on_hentai_more_loaded(self, results, err):
+        if err:
+            self.hentai_status_label.setText(_tr("Error: {error}").format(error=err))
+            self.hentai_load_more_btn.setEnabled(True)
+            return
+        new_posts = [p for p in (self._adapt_hhaven_post(h) for h in (results or [])) if p]
+        if not new_posts:
+            self.hentai_status_label.setText(_tr("No more results."))
+            self.hentai_load_more_btn.setEnabled(False)
+            return
+        self.hentai_current_results.extend(new_posts)
+        self.hentai_current_results = self.hentai_current_results[:150]
+        self.hentai_status_label.setText(_tr("Loaded {count} series.").format(count=len(self.hentai_current_results)))
+        self.hentai_load_more_btn.setEnabled(len(self.hentai_current_results) < 150)
+        self._populate_hentai_grid(self.hentai_current_results)
 
-    def on_hentai_thumbnail_clicked(self, post: dict, widget: ThumbnailWidget):
-        hentai_obj = post.get("hh_object")
-        if not hentai_obj: return
-
-        widget.set_text(_tr("Loading..."))
-        worker = AsyncApiWorker(_scrape_hhaven_series_page, hentai_obj)
-        def on_finished(series_data, err):
-            widget.set_text("")
-            if err:
-                QMessageBox.critical(self, "Error", f"Could not load series page:\n{err}")
+    def _populate_hentai_grid(self, posts):
+        self.clear_grid(self.hentai_grid)
+        self.hentai_post_to_widget_map.clear()
+        posts = [p for p in (posts or []) if isinstance(p, dict)]
+        if not posts:
+            return
+        spacing = 10
+        card_w = 170
+        view_w = max(200, self.hentai_scroll.viewport().width() - 2)
+        cols = max(1, int((view_w + spacing) // (card_w + spacing)))
+        cols = min(cols, len(posts))
+        for i, post in enumerate(posts):
+            row, col = divmod(i, cols)
+            thumb = HentaiThumbnailWidget(post)
+            thumb.clicked.connect(self.on_hentai_thumbnail_clicked)
+            self.hentai_grid.addWidget(thumb, row, col, Qt.AlignLeft | Qt.AlignTop)
+            post_id = post.get("id") or f"hh_{i}"
+            post["id"] = post_id
+            self.hentai_post_to_widget_map[post_id] = thumb
+            preview = post.get("preview_url")
+            if preview:
+                worker = ImageWorker(preview, post)
+                worker.signals.finished.connect(self.on_thumbnail_loaded)
+                self.threadpool.start(worker)
             else:
-                dialog = HentaiSeriesDialog(series_data, self); self.open_dialogs.append(dialog); dialog.show()
-        worker.signals.finished.connect(on_finished)
-        self.threadpool.start(worker)
+                thumb.set_text("No image")
 
-    def _adapt_hhaven_to_post(self, hentai_obj):
+    def on_hentai_thumbnail_clicked(self, post: dict, widget: HentaiThumbnailWidget):
+        if not getattr(self, 'is_incognito_window', False) and hasattr(self, 'persona') and self.persona is not None:
+            try:
+                record_hentai_open(self.persona, post)
+                self._schedule_persona_save()
+            except Exception as e:
+                print(f"Error recording hentai open: {e}")
+        dialog = HentaiSeriesDialog(post, self)
+        self.open_dialogs.append(dialog)
+        dialog.destroyed.connect(lambda: self.open_dialogs.remove(dialog) if dialog in self.open_dialogs else None)
+        dialog.show()
+
+    def _adapt_hhaven_post(self, item):
+        if not isinstance(item, dict):
+            return None
+        slug = item.get("slug", "")
+        title = item.get("title")
+        if isinstance(title, dict):
+            title = title.get("rendered") or title.get("raw") or ""
+        title = re.sub(r"<[^>]+>", "", str(title or "")).strip()
+        thumb = item.get("preview_url") or item.get("thumbnail_url") or item.get("cover_url") or ""
+        if not thumb:
+            meta = item.get("meta") or {}
+            thumb = meta.get("vraven_remote_thumbnail") or ""
+        thumb = _hhaven_thumb(thumb)
+        genre_ids = item.get("genre_ids") or item.get("wp-manga-genre") or []
+        genre_names = []
+        for gid in genre_ids or []:
+            try:
+                name = _HH_GENRE_NAMES.get(int(gid), "")
+            except Exception:
+                name = ""
+            if name:
+                genre_names.append(name)
+        views = int(item.get("views") or item.get("score") or 0)
         return {
-            "id": f"hh_{hentai_obj.id}",
-            "preview_url": hentai_obj.thumbnail,
-            "file_url": None, 
+            "id": f"hh_{item.get('id', '') or slug}",
+            "preview_url": thumb,
+            "file_url": None,
             "rating": "explicit",
-            "score": hentai_obj.rating.votes,
-            "tags": ", ".join([tag.name for tag in hentai_obj.tags]),
-            "source_post_url": f"https://hentaihaven.xxx/watch/{hentai_obj.name}",
-            "hh_object": hentai_obj, 
-            "file_ext": "mp4" 
+            "score": views,
+            "tags": ", ".join(genre_names),
+            "source_post_url": f"https://hentaihaven.xxx/watch/{slug}/" if slug else "",
+            "hentai_slug": slug,
+            "hentai_title": title,
+            "hentai_views": views,
+            "hentai_genres": genre_names,
+            "hhaven_date": item.get("date") or item.get("created_at") or "",
+            "hhaven_data": item,
+            "file_ext": "png",
         }
 
     def fetch_site_stats(self):
@@ -2105,6 +2608,7 @@ class GelDanApp(QWidget):
                     if isinstance(count, int): total += count
                     else: has_error = True
                 except Exception: has_error = True; print(f"Failed to get {site} count.")
+                time.sleep(0.5)
 
         try:
             if fetch_all or "Gelbooru" in enabled_sources:
@@ -2666,7 +3170,7 @@ class GelDanApp(QWidget):
         layout.addWidget(left_pane)
 
         right_tabs = QTabWidget()
-        
+
         chat_widget = QWidget()
         chat_layout = QVBoxLayout(chat_widget)
 
@@ -2688,44 +3192,42 @@ class GelDanApp(QWidget):
 
         chat_layout.addWidget(self.ai_chat_area_stack)
 
-        self.ai_shared_input_area = QPlainTextEdit()
-        self.ai_shared_input_area.setObjectName("ai_chat_input_area")
-        self.ai_shared_input_area.setPlaceholderText(_tr("Type your message here... Press Ctrl+Enter to send."))
-        self.ai_shared_input_area.setMaximumHeight(120)
-        self.ai_input_areas.append(self.ai_shared_input_area) 
-        self.ai_shared_input_area.installEventFilter(self)
-
-        self.ai_shared_send_button = QPushButton(qta.icon('fa5s.paper-plane'), _tr("Send"))
-        self.ai_shared_send_button.clicked.connect(self.send_ai_message)
-
-        chat_layout.addWidget(self.ai_shared_input_area)
-        chat_layout.addWidget(self.ai_shared_send_button)
         personalization_group = QGroupBox(_tr("Personalization"))
         personalization_layout = QFormLayout(personalization_group)
-        self.ai_name_edit = QLineEdit() 
+        self.ai_name_edit = QLineEdit()
         self.ai_persona_edit = QPlainTextEdit()
-        
+
         self.ai_provider_combo = QComboBox()
-        self.ai_provider_combo.addItems(["OpenRouter", "Google Gemini (Experimental)"])
+        self.ai_provider_combo.addItems(["OpenRouter", "Google Gemini", "Ollama (Local)"])
         self.ai_provider_combo.currentTextChanged.connect(self.on_ai_provider_changed)
-        
+
         self.ai_model_edit = QLineEdit()
         self.ai_gemini_model_combo = QComboBox()
         self.ai_gemini_model_combo.addItems([
-            "gemini-2.5-pro",
             "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
+            "gemini-2.5-pro",
             "gemini-2.0-flash",
-            "gemini-1.5-pro"
+            "gemini-1.5-pro",
+            "gemini-1.5-flash"
         ])
         self.ai_gemini_model_combo.setVisible(False)
+        self.ai_ollama_model_combo = QComboBox()
+        self.ai_ollama_model_combo.setEditable(True)
+        self.ai_ollama_model_combo.setVisible(False)
         self.ai_allow_spicy_check = QCheckBox(_tr("Allow 'spicy' or suggestive content"))
-        
+
         personalization_layout.addRow(_tr("Name:"), self.ai_name_edit)
         personalization_layout.addRow(_tr("System Prompt / Persona:"), self.ai_persona_edit)
         personalization_layout.addRow(_tr("AI Provider:"), self.ai_provider_combo)
         personalization_layout.addRow(_tr("Model:"), self.ai_model_edit)
         personalization_layout.addRow(_tr("Gemini Model:"), self.ai_gemini_model_combo)
+        ollama_row = QHBoxLayout()
+        ollama_row.addWidget(self.ai_ollama_model_combo)
+        self.ai_ollama_refresh_btn = QPushButton(qta.icon('fa5s.sync-alt'), "")
+        self.ai_ollama_refresh_btn.setToolTip(_tr("Refresh Ollama models"))
+        self.ai_ollama_refresh_btn.clicked.connect(self._refresh_ollama_models)
+        ollama_row.addWidget(self.ai_ollama_refresh_btn)
+        personalization_layout.addRow(_tr("Ollama Model:"), ollama_row)
         personalization_layout.addRow(self.ai_allow_spicy_check)
 
         from PyQt5.QtWidgets import QSlider
@@ -2733,7 +3235,7 @@ class GelDanApp(QWidget):
         self.ai_helpful_sassy_slider = QSlider(Qt.Horizontal)
         self.ai_concise_verbose_slider = QSlider(Qt.Horizontal)
         self.ai_creativity_slider = QSlider(Qt.Horizontal)
-        
+
         personalization_layout.addRow(_tr("Formal <-> Casual:"), self.ai_formal_casual_slider)
         personalization_layout.addRow(_tr("Helpful <-> Sassy:"), self.ai_helpful_sassy_slider)
         personalization_layout.addRow(_tr("Concise <-> Verbose:"), self.ai_concise_verbose_slider)
@@ -2746,7 +3248,7 @@ class GelDanApp(QWidget):
         personalization_tab_widget = QWidget()
         personalization_tab_layout = QVBoxLayout(personalization_tab_widget)
         personalization_tab_layout.addWidget(personalization_group)
-        
+
         right_tabs.addTab(chat_widget, qta.icon('fa5s.comments'), _tr("Chat"))
         right_tabs.addTab(personalization_tab_widget, qta.icon('fa5s.user-cog'), _tr("Personalization"))
         layout.addWidget(right_tabs)
@@ -2780,7 +3282,7 @@ class GelDanApp(QWidget):
         elif self.tabs.widget(index) == self.downloads_tab:
             self.refresh_downloads_grid()
         elif self.tabs.widget(index) == self.hentai_tab and self.hentai_grid.count() == 0:
-            self.random_hentai()
+            self.trending_hentai()
 
     def on_browser_sub_tab_changed(self, index):
         is_newest_tab = self.browser_content_tabs.widget(index) == self.browser_content_tabs.widget(0)
@@ -2939,6 +3441,12 @@ class GelDanApp(QWidget):
         source_name = data.get("source")
         self.manga_selected_entry = {"entry": entry, "source": source_name}
         self.update_manga_inspector(self.manga_selected_entry)
+        if not getattr(self, 'is_incognito_window', False) and hasattr(self, 'persona') and self.persona is not None:
+            try:
+                record_manga_open(self.persona, entry, source_name)
+                self._schedule_persona_save()
+            except Exception as e:
+                print(f"Error recording manga open: {e}")
 
     def open_selected_manga_in_viewer(self):
         if not self.manga_selected_entry:
@@ -3846,9 +4354,146 @@ class GelDanApp(QWidget):
             self.load_ai_preset_settings(index)
 
     def on_ai_provider_changed(self, provider):
-        is_gemini = provider == "Google Gemini (Experimental)"
-        self.ai_model_edit.setVisible(not is_gemini)
+        is_gemini = provider == "Google Gemini"
+        is_ollama = provider == "Ollama (Local)"
+        self.ai_model_edit.setVisible(not is_gemini and not is_ollama)
         self.ai_gemini_model_combo.setVisible(is_gemini)
+        self.ai_ollama_model_combo.setVisible(is_ollama)
+        self.ai_ollama_refresh_btn.setVisible(is_ollama)
+        if is_ollama:
+            self._ensure_ollama()
+
+    def _ensure_ollama(self):
+        try:
+            import requests as _r
+            resp = _r.get("http://localhost:11434/api/tags", timeout=2)
+            if resp.status_code == 200:
+                self._refresh_ollama_models()
+                return
+        except Exception:
+            pass
+
+        ollama_exe = self._find_ollama_exe()
+        if ollama_exe:
+            try:
+                import subprocess
+                subprocess.Popen([ollama_exe, "serve"], creationflags=0x08000000 if os.name == 'nt' else 0)
+                QTimer.singleShot(3000, self._refresh_ollama_models)
+                return
+            except Exception:
+                pass
+
+        reply = QMessageBox.question(
+            self,
+            _tr("Ollama Not Found"),
+            _tr("Ollama is not installed. It lets you run AI models locally.\n\nDownload and install Ollama now?"),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+        if reply == QMessageBox.Yes:
+            self._download_and_install_ollama()
+
+    def _find_ollama_exe(self):
+        paths = [
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Ollama", "ollama.exe"),
+            os.path.join(os.environ.get("ProgramFiles", ""), "Ollama", "ollama.exe"),
+            os.path.join(os.environ.get("USERPROFILE", ""), "ollama", "ollama.exe"),
+        ]
+        for p in paths:
+            if os.path.exists(p):
+                return p
+        try:
+            import shutil
+            found = shutil.which("ollama")
+            if found:
+                return found
+        except Exception:
+            pass
+        return None
+
+    def _download_and_install_ollama(self):
+        from PyQt5.QtWidgets import QProgressDialog
+        url = "https://ollama.com/download/OllamaSetup.exe"
+        installer_path = os.path.join(snekbooru_temp_dir("ollama"), "OllamaSetup.exe")
+        os.makedirs(os.path.dirname(installer_path), exist_ok=True)
+
+        progress = QProgressDialog(_tr("Downloading Ollama..."), _tr("Cancel"), 0, 0, self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.show()
+
+        def _download():
+            try:
+                import requests as _r
+                resp = _r.get(url, stream=True, timeout=300)
+                resp.raise_for_status()
+                total = int(resp.headers.get('content-length', 0))
+                if total:
+                    progress.setMaximum(total)
+                downloaded = 0
+                with open(installer_path, 'wb') as f:
+                    for chunk in resp.iter_content(8192):
+                        if progress.wasCanceled():
+                            return False, "Cancelled"
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total:
+                            progress.setValue(downloaded)
+                return True, None
+            except Exception as e:
+                return False, str(e)
+
+        def _on_download_done(data, err):
+            progress.close()
+            if err or not data:
+                QMessageBox.warning(self, _tr("Download Failed"), str(err or "Unknown error"))
+                return
+            try:
+                import subprocess
+                subprocess.Popen([installer_path, "/S"], creationflags=0x08000000)
+                QMessageBox.information(
+                    self, _tr("Installing Ollama"),
+                    _tr("Ollama is installing. Once complete, it will start automatically.\n\nAfter installation, pull a model by typing its name in the model field (e.g. 'llama3.2').")
+                )
+            except Exception as e:
+                QMessageBox.warning(self, _tr("Install Failed"), str(e))
+
+        worker = ApiWorker(_download)
+        worker.signals.finished.connect(_on_download_done)
+        self.threadpool.start(worker)
+
+    def _refresh_ollama_models(self):
+        self.ai_ollama_model_combo.clear()
+        default_models = ["llama3.2", "llama3.1", "gemma3", "mistral", "phi3", "qwen2.5"]
+        for m in default_models:
+            self.ai_ollama_model_combo.addItem(m)
+        self.ai_ollama_model_combo.setEditText("llama3.2")
+
+        def _fetch():
+            try:
+                import requests as _r
+                resp = _r.get("http://localhost:11434/api/tags", timeout=5)
+                resp.raise_for_status()
+                data = resp.json()
+                return [m.get("name", "") for m in data.get("models", [])], None
+            except Exception as e:
+                return [], str(e)
+
+        worker = ApiWorker(_fetch)
+        def on_done(result, err):
+            if result and not err:
+                model_list = result[0] if isinstance(result, tuple) else result
+                if not isinstance(model_list, list):
+                    return
+                current = self.ai_ollama_model_combo.currentText()
+                self.ai_ollama_model_combo.clear()
+                for m in model_list:
+                    self.ai_ollama_model_combo.addItem(m)
+                if current:
+                    idx = self.ai_ollama_model_combo.findText(current)
+                    if idx >= 0:
+                        self.ai_ollama_model_combo.setCurrentIndex(idx)
+        worker.signals.finished.connect(on_done)
+        self.threadpool.start(worker)
 
     def load_ai_preset_settings(self, index):
         presets = SETTINGS.get("ai_presets", [])
@@ -3866,11 +4511,14 @@ class GelDanApp(QWidget):
             
             self.ai_model_edit.setText(preset.get("model", ""))
             
-            if provider == "Google Gemini (Experimental)":
-                gemini_model = preset.get("model", "gemini-2.0-flash")
+            if provider == "Google Gemini":
+                gemini_model = preset.get("model", "gemini-2.5-flash")
                 idx = self.ai_gemini_model_combo.findText(gemini_model)
                 if idx >= 0:
                     self.ai_gemini_model_combo.setCurrentIndex(idx)
+            elif provider == "Ollama (Local)":
+                ollama_model = preset.get("model", "llama3.2")
+                self.ai_ollama_model_combo.setEditText(ollama_model)
             
             self.ai_allow_spicy_check.setChecked(preset.get("allow_spicy", True))
             self.ai_formal_casual_slider.setValue(preset.get("formal_casual", 50))
@@ -3887,8 +4535,10 @@ class GelDanApp(QWidget):
             preset["persona"] = self.ai_persona_edit.toPlainText()
             preset["provider"] = self.ai_provider_combo.currentText()
             
-            if self.ai_provider_combo.currentText() == "Google Gemini (Experimental)":
+            if self.ai_provider_combo.currentText() == "Google Gemini":
                 preset["model"] = self.ai_gemini_model_combo.currentText()
+            elif self.ai_provider_combo.currentText() == "Ollama (Local)":
+                preset["model"] = self.ai_ollama_model_combo.currentText()
             else:
                 preset["model"] = self.ai_model_edit.text()
             
@@ -3930,56 +4580,123 @@ class GelDanApp(QWidget):
         self.ai_chat_tabs.clear()
         self.ai_chat_ui.clear()
 
-        for i, chat in enumerate(SETTINGS.get("ai_chats", [])):
-            self.ai_chat_list.addItem(chat["name"])
-            self.add_ai_chat_tab(chat["name"], chat["history"])
+        chats = SETTINGS.get("ai_chats", [])
+        if not chats:
+            self.ai_chat_area_stack.setCurrentWidget(self.ai_no_chats_widget)
+            return
+
+        from collections import defaultdict
+        now = time.time()
+        groups = defaultdict(list)
+        for i, chat in enumerate(chats):
+            created = chat.get("created", 0) or chat.get("last_active", 0)
+            age_days = (now - created) / 86400
+            if age_days < 1:
+                groups[_tr("Today")].append((i, chat))
+            elif age_days < 2:
+                groups[_tr("Yesterday")].append((i, chat))
+            elif age_days < 7:
+                groups[_tr("This Week")].append((i, chat))
+            elif age_days < 30:
+                groups[_tr("This Month")].append((i, chat))
+            else:
+                groups[_tr("Older")].append((i, chat))
+
+        ordered = ["Today", "Yesterday", "This Week", "This Month", "Older"]
+        chat_index_map = {}
+        for group_name in ordered:
+            tr_name = _tr(group_name)
+            items = groups.get(tr_name, [])
+            if not items:
+                continue
+            header_item = QListWidgetItem(f"── {tr_name} ──")
+            header_item.setFlags(Qt.NoItemFlags)
+            header_item.setForeground(Qt.gray)
+            font = header_item.font()
+            font.setBold(True)
+            header_item.setFont(font)
+            self.ai_chat_list.addItem(header_item)
+            for idx, chat in items:
+                item = QListWidgetItem(chat["name"])
+                item.setData(Qt.UserRole, idx)
+                self.ai_chat_list.addItem(item)
+                chat_index_map[idx] = True
+
+        self.ai_chat_area_stack.setCurrentWidget(self.ai_chat_tabs)
+
+        for i, chat in enumerate(chats):
+            self.add_ai_chat_tab(chat["name"], chat.get("history", []))
 
         active_chat_index = SETTINGS.get("ai_active_chat_index", 0)
         if 0 <= active_chat_index < self.ai_chat_list.count():
-            self.ai_chat_list.setCurrentRow(active_chat_index)
-            self.ai_chat_tabs.setCurrentIndex(active_chat_index)
-        
-        if self.ai_chat_list.count() == 0:
-            self.ai_chat_area_stack.setCurrentWidget(self.ai_no_chats_widget)
-        else:
-            self.ai_chat_area_stack.setCurrentWidget(self.ai_chat_tabs)
+            for row in range(self.ai_chat_list.count()):
+                item = self.ai_chat_list.item(row)
+                if item and item.data(Qt.UserRole) == active_chat_index:
+                    self.ai_chat_list.setCurrentRow(row)
+                    self.ai_chat_tabs.setCurrentIndex(active_chat_index)
+                    break
 
     def add_ai_chat_tab(self, name, history):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        
-        history_browser = ChatBrowser()
-        history_browser.setOpenExternalLinks(False)
-        history_browser.anchorClicked.connect(self.on_chat_anchor_clicked)
-        history_browser.setObjectName("ai_chat_history_browser")
 
-        layout.addWidget(history_browser)
+        chat_list = ChatMessageList()
+        layout.addWidget(chat_list, 1)
+
+        input_row = QHBoxLayout()
+        input_area = QPlainTextEdit()
+        input_area.setObjectName("ai_chat_input_area")
+        input_area.setPlaceholderText(_tr("Type your message here... Press Ctrl+Enter to send."))
+        input_area.setMaximumHeight(100)
+        input_area.installEventFilter(self)
+        self.ai_input_areas.append(input_area)
+
+        send_btn = QPushButton(qta.icon('fa5s.paper-plane'), _tr(" Send"))
+        send_btn.clicked.connect(lambda checked=None: self._send_from_tab())
+
+        stop_btn = QPushButton(qta.icon('fa5s.stop'), _tr(" Stop"))
+        stop_btn.setToolTip(_tr("Stop the current AI response"))
+        stop_btn.clicked.connect(lambda: self._stop_ai_generation())
+        stop_btn.setVisible(False)
+
+        input_row.addWidget(input_area)
+        input_row.addWidget(send_btn)
+        input_row.addWidget(stop_btn)
+        layout.addLayout(input_row)
 
         self.ai_chat_tabs.addTab(tab, name)
-        
+
         tab_index = self.ai_chat_tabs.indexOf(tab)
         self.ai_chat_ui[tab_index] = {
-            "history_browser": history_browser
+            "chat_list": chat_list,
+            "input_area": input_area,
+            "send_btn": send_btn,
+            "stop_btn": stop_btn,
         }
-        
+
         self._rebuild_chat_display(tab_index)
 
 
     def switch_ai_chat(self, current, previous):
-        if current:
-            index = self.ai_chat_list.row(current)
-            self.ai_chat_tabs.setCurrentIndex(index)
-            SETTINGS["ai_active_chat_index"] = index
-            self._rebuild_chat_display(index)
+        if current and current.data(Qt.UserRole) is not None:
+            index = current.data(Qt.UserRole)
+            if index < self.ai_chat_tabs.count():
+                self.ai_chat_tabs.setCurrentIndex(index)
+                SETTINGS["ai_active_chat_index"] = index
+                self._rebuild_chat_display(index)
 
     def new_ai_chat(self):
-        from PyQt5.QtWidgets import QInputDialog
-        name, ok = QInputDialog.getText(self, _tr("New Chat"), _tr("Enter chat name:"))
-        if ok and name:
-            SETTINGS["ai_chats"].append({"name": name, "history": []})
-            SETTINGS["ai_active_chat_index"] = len(SETTINGS["ai_chats"]) - 1
-            save_settings(SETTINGS)
-            self.populate_ai_chats()
+        chat_num = len(SETTINGS["ai_chats"]) + 1
+        SETTINGS["ai_chats"].append({
+            "name": f"Chat {chat_num}",
+            "history": [],
+            "memory": "",
+            "created": time.time(),
+            "last_active": time.time()
+        })
+        SETTINGS["ai_active_chat_index"] = len(SETTINGS["ai_chats"]) - 1
+        save_settings(SETTINGS)
+        self.populate_ai_chats()
 
     def rename_ai_chat(self):
         active_index = SETTINGS.get("ai_active_chat_index", 0)
@@ -4011,137 +4728,445 @@ class GelDanApp(QWidget):
         save_settings(SETTINGS)
         self.populate_ai_chats()
 
-    def send_ai_message(self):
+    def _send_from_tab(self):
         active_index = self.ai_chat_tabs.currentIndex()
+        if active_index < 0: return
+        self.send_ai_message(active_index)
+
+    def send_ai_message(self, chat_index=None, retry_from=None):
+        if chat_index is None:
+            active_index = self.ai_chat_tabs.currentIndex()
+        else:
+            active_index = chat_index
 
         if active_index < 0 and not SETTINGS.get("ai_chats"):
-            SETTINGS["ai_chats"] = [{"name": "Chat 1", "history": []}]
+            SETTINGS["ai_chats"] = [{"name": "Chat 1", "history": [], "memory": "", "created": time.time()}]
             SETTINGS["ai_active_chat_index"] = 0
             save_settings(SETTINGS)
-            self.populate_ai_chats() 
-            active_index = 0 
+            self.populate_ai_chats()
+            active_index = 0
 
         if active_index < 0: return
-        chat_index = active_index
 
         ui = self.ai_chat_ui[active_index]
-        user_message = self.ai_shared_input_area.toPlainText().strip()
+        input_area = ui["input_area"]
+        chat = SETTINGS["ai_chats"][active_index]
+        chat.setdefault("history", [])
+        chat.setdefault("memory", "")
+        chat.setdefault("created", time.time())
 
         if not self.ai_can_send:
-            ui["history_browser"].append(f"<b style='color:orange;'>{_tr('Please wait a moment before sending another message.')}</b><hr>")
             return
 
-        if not user_message: return
+        if retry_from is not None:
+            history = chat["history"]
+            if retry_from >= len(history) or history[retry_from]["role"] != "user":
+                return
+            user_message = history[retry_from]["content"]
+            del history[retry_from:]
+        else:
+            user_message = input_area.toPlainText().strip()
+            if not user_message:
+                return
 
-        self.ai_shared_input_area.setEnabled(False)
-        self.ai_shared_send_button.setEnabled(False)
-        self.ai_can_send = False
+        chat["history"].append({"role": "user", "content": user_message})
+        chat["last_active"] = time.time()
 
-        import markdown
-        ui["history_browser"].append(f"<b>You:</b><br>{markdown.markdown(user_message)}<hr>")
-        self.ai_shared_input_area.clear()
+        if chat.get("name", "").startswith("Chat ") and len(chat["history"]) == 1:
+            auto_name = user_message[:40].replace("\n", " ").strip()
+            if auto_name:
+                chat["name"] = auto_name
+                save_settings(SETTINGS)
+                self.populate_ai_chats()
 
-        chat_history = SETTINGS["ai_chats"][active_index]["history"]
-        chat_history.append({"role": "user", "content": user_message})
+        if retry_from is not None:
+            self._rebuild_chat_display(active_index)
+        else:
+            import markdown
+            bubble = ChatBubble(markdown.markdown(user_message, extensions=['fenced_code', 'tables']), is_user=True)
+            ui["chat_list"].add_bubble(bubble)
+
+        self._send_ai_request(active_index)
+
+    def _build_ai_messages(self, chat_index):
+        chat = SETTINGS["ai_chats"][chat_index]
+        history = chat.get("history", [])
+        memory = chat.get("memory", "")
 
         active_preset = SETTINGS["ai_presets"][SETTINGS["ai_active_preset_index"]]
         system_prompt = self._prepare_ai_system_prompt(active_preset)
-        
-        messages = [{"role": "system", "content": system_prompt}] + chat_history
 
-        worker = AIStreamWorker(messages, temperature=active_preset["creativity"] / 100.0)
-        worker.signals.chunk.connect(lambda chunk: self.on_ai_chunk_received(chunk, active_index))
-        worker.signals.finished.connect(lambda full_response: self.on_ai_finished(full_response, active_index))
-        worker.signals.error.connect(self.on_ai_error)
-        self.threadpool.start(worker)
+        if memory:
+            system_prompt += f"\n\n[USER_MEMORY]\n{memory}\n[/USER_MEMORY]"
 
-        ui["history_browser"].append("<b>AI:</b><br>")
+        messages = [{"role": "system", "content": system_prompt}]
+        recent = history[-40:]
+        messages.extend(recent)
+        return messages
+
+    def _compact_ai_context(self, chat_index):
+        chat = SETTINGS["ai_chats"][chat_index]
+        history = chat.get("history", [])
+        if len(history) < 30:
+            return
+
+        active_preset = SETTINGS["ai_presets"][SETTINGS["ai_active_preset_index"]]
+        model = active_preset.get("model", "")
+
+        summary_prompt = (
+            "Summarize the following conversation into a concise memory block. "
+            "Keep key facts, user preferences, names, and important context. "
+            "Output ONLY the summary text, no preamble."
+        )
+        msgs = [{"role": "system", "content": summary_prompt}]
+        for h in history[:20]:
+            role = "user" if h["role"] == "user" else "assistant"
+            msgs.append({"role": role, "content": h["content"][:2000]})
+
+        try:
+            headers = {
+                "Authorization": f"Bearer {SETTINGS.get('ai_api_key')}",
+                "Content-Type": "application/json",
+            }
+            payload = {"model": model or DEFAULT_AI_MODEL, "messages": msgs, "temperature": 0.3}
+            resp = requests.post(
+                SETTINGS.get('ai_endpoint', 'https://openrouter.ai/api/v1/chat/completions'),
+                headers=headers, json=payload, timeout=60
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                summary = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                if summary:
+                    chat["memory"] = summary.strip()
+                    chat["history"] = history[-15:]
+                    save_settings(SETTINGS)
+        except Exception:
+            pass
+
+    def _trim_conversation_history(self, history, max_messages=40):
+        if len(history) <= max_messages:
+            return history
+        trimmed = history[-max_messages:]
+        if trimmed[0]["role"] == "assistant":
+            trimmed = trimmed[1:]
+        return trimmed
+
+    def _stop_ai_generation(self):
+        if hasattr(self, '_current_ai_worker') and self._current_ai_worker:
+            self._current_ai_worker.stop()
+            try:
+                self._current_ai_worker.signals.chunk.disconnect()
+                self._current_ai_worker.signals.finished.disconnect()
+                self._current_ai_worker.signals.error.disconnect()
+            except Exception:
+                pass
+            self._current_ai_worker = None
+
+        active_index = self.ai_chat_tabs.currentIndex()
+        if active_index >= 0 and active_index in self.ai_chat_ui:
+            ui = self.ai_chat_ui[active_index]
+            stopped_bubble = ChatBubble("[Stopped]", is_user=False)
+            ui["chat_list"].add_bubble(stopped_bubble)
+            self.reset_ai_cooldown(active_index)
 
     def on_ai_chunk_received(self, chunk, chat_index):
-        if chat_index == self.ai_chat_tabs.currentIndex():
+        if chat_index in self.ai_chat_ui:
             ui = self.ai_chat_ui[chat_index]
-            cursor = ui["history_browser"].textCursor()
-            cursor.movePosition(QTextCursor.End)
-            cursor.insertText(chunk)
-            ui["history_browser"].moveCursor(QTextCursor.End)
+            bubble = ui.get("_streaming_bubble")
+            if bubble:
+                if not getattr(bubble, '_started', False):
+                    bubble._started = True
+                    bubble.set_text("")
+                bubble.append_text(chunk)
 
     def on_ai_finished(self, full_response, chat_index):
-        SETTINGS["ai_chats"][chat_index]["history"].append({"role": "assistant", "content": full_response})
+        if chat_index in self.ai_chat_ui:
+            ui = self.ai_chat_ui[chat_index]
+            bubble = ui.pop("_streaming_bubble", None)
+            if bubble:
+                import markdown
+                clean = re.sub(r'\{+(?:SEARCH|search|SET|set|UPDATE_SETTING|update_setting|OPEN_TAB|open_tab|HENTAI_SEARCH|hentai_search|MANGA_SEARCH|manga_search|HENTAI_TRENDING|hentai_trending|DOWNLOAD|download|FAVORITE_ADD|favorite_add|FAVORITE_REMOVE|favorite_remove|FAVORITE_CREATE|favorite_create|FAVORITE_RENAME|favorite_rename|FAVORITE_DELETE|favorite_delete|FAVORITE_MERGE|favorite_merge|CURATE|curate):\s*[^}]+\}+', '', full_response, flags=re.DOTALL)
+                clean = re.sub(r'\{+(?:RANDOM_FAVORITE|random_favorite|HENTAI_RANDOM|hentai_random|SHOW_SIMILAR|show_similar):?\s*[^}]*\}+', '', clean)
+                bubble.set_text(markdown.markdown(clean.strip(), extensions=['fenced_code', 'tables']))
+
+        self._ai_pending_settings = {}
+        self.process_ai_actions(full_response, chat_index)
+
+        if self._ai_pending_settings:
+            old_lang = SETTINGS.get("language")
+            SETTINGS.update(self._ai_pending_settings)
+            save_settings(SETTINGS)
+            self.reapply_settings(old_lang)
+            if chat_index in self.ai_chat_ui:
+                keys = ", ".join(self._ai_pending_settings.keys())
+                confirm = ChatBubble(_tr("Applied: {keys}").format(keys=keys), is_user=False)
+                self.ai_chat_ui[chat_index]["chat_list"].add_bubble(confirm)
+            self._ai_pending_settings = {}
+
+        chat = SETTINGS["ai_chats"][chat_index]
+        chat["history"].append({"role": "assistant", "content": full_response})
+        chat["last_active"] = time.time()
         save_settings(SETTINGS)
 
-        self.render_ai_chat_history(chat_index)
-
-        self.process_ai_actions(full_response, chat_index)
+        if len(chat["history"]) > 30:
+            self._compact_ai_context(chat_index)
 
         self.ai_cooldown_timer.singleShot(1000, lambda: self.reset_ai_cooldown(chat_index))
 
     def render_ai_chat_history(self, chat_index):
+        if chat_index not in self.ai_chat_ui:
+            return
         ui = self.ai_chat_ui[chat_index]
-        history = SETTINGS["ai_chats"][chat_index].get("history", [])
-        
+        chat_list = ui["chat_list"]
+        for b in list(chat_list.bubbles):
+            b.deleteLater()
+        chat_list.bubbles.clear()
+
+        history = SETTINGS.get("ai_chats", [{}])[chat_index].get("history", [])
         import markdown
-        html = ""
-        for msg in history:
-            role = _tr("You") if msg["role"] == "user" else _tr("AI")
-            color = "lightblue" if msg["role"] == "user" else "lightgreen"
-            content_html = markdown.markdown(msg["content"])
-            results_html = ""
-            if "search_results" in msg:
-                results_html = "<div style='margin-top: 10px;'>"
+        for i, msg in enumerate(history):
+            is_user = msg["role"] == "user"
+            content = msg["content"]
+            if not is_user:
+                content = re.sub(r'\{+(?:SEARCH|search|SET|set|UPDATE_SETTING|update_setting|OPEN_TAB|open_tab|HENTAI_SEARCH|hentai_search|MANGA_SEARCH|manga_search|HENTAI_TRENDING|hentai_trending|DOWNLOAD|download|FAVORITE_ADD|favorite_add|FAVORITE_REMOVE|favorite_remove|FAVORITE_CREATE|favorite_create|FAVORITE_RENAME|favorite_rename|FAVORITE_DELETE|favorite_delete|FAVORITE_MERGE|favorite_merge|CURATE|curate|RANDOM_FAVORITE|random_favorite|HENTAI_RANDOM|hentai_random|SHOW_SIMILAR|show_similar):?\s*[^}]*\}+', '', content, flags=re.DOTALL)
+            content = markdown.markdown(content.strip(), extensions=['fenced_code', 'tables'])
+            bubble = ChatBubble(content, is_user=is_user, msg_index=i)
+            bubble.edit_requested.connect(lambda b, ci=chat_index: self._edit_ai_message(ci, b))
+            bubble.retry_requested.connect(lambda b, ci=chat_index: self._retry_ai_message(ci, b))
+            chat_list.add_bubble(bubble)
+            if "search_results" in msg and not is_user:
                 for res in msg["search_results"]:
-                    img_src = f"data:image/png;base64,{res['image_data']}" if 'image_data' in res else ""
-                    if img_src:
-                        badge = " <span style='background: rgba(0,0,0,0.7); color: white; padding: 1px 4px; border-radius: 2px; font-size: 10px;'>▶ Video</span>" if res.get('is_video') else ""
-                        results_html += f"<a href='post:{res['post_id']}'><img src='{img_src}' height='150' style='margin-right: 5px; border-radius: 4px;' />{badge}</a>"
-                results_html += "</div>"
-            
-            html += f"<div style='margin-bottom:10px;'><b style='color:{color};'>{role}:</b><br>{content_html}{results_html}</div><hr>"
-        
-        ui["history_browser"].setHtml(html)
-        ui["history_browser"].moveCursor(QTextCursor.End)
+                    if 'image_data' in res:
+                        pix = QPixmap()
+                        pix.loadFromData(base64.b64decode(res['image_data']))
+                        img_bubble = ChatImageBubble(pix, res)
+                        img_bubble.clicked.connect(lambda post=res: self._open_ai_search_result(post))
+                        chat_list.add_bubble(img_bubble)
+            if "hentai_results" in msg and not is_user:
+                for rd_data in msg["hentai_results"]:
+                    card = ChatRefCard(rd_data.get("name", "Untitled"), None, rd_data)
+                    card.clicked.connect(lambda rd=rd_data: self._on_ai_ref_clicked(rd))
+                    chat_list.add_bubble(card)
+            if "manga_results" in msg and not is_user:
+                for rd_data in msg["manga_results"]:
+                    card = ChatRefCard(rd_data.get("title", "Untitled"), None, rd_data)
+                    card.clicked.connect(lambda rd=rd_data: self._on_ai_ref_clicked(rd))
+                    chat_list.add_bubble(card)
+
+    def _open_ai_search_result(self, post_data):
+        post_id = post_data.get('post_id', '')
+        post = self.ai_search_results.get(post_id)
+        if post:
+            self.open_ai_post_viewer(post)
+
+    def _edit_ai_message(self, chat_index, bubble):
+        history = SETTINGS["ai_chats"][chat_index]["history"]
+        idx = bubble.msg_index
+        if idx < 0 or idx >= len(history) or history[idx]["role"] != "user":
+            return
+        if getattr(bubble, '_editing', False):
+            return
+        bubble._editing = True
+
+        old_text = history[idx]["content"]
+        edit = QTextEdit(bubble)
+        edit.setPlainText(old_text)
+        edit.setStyleSheet("QTextEdit { background: #1e3a5f; color: #fff; border: 1px solid #3b82f6; border-radius: 8px; padding: 6px; }")
+        edit.setMaximumHeight(120)
+        bubble.main_layout.insertWidget(0, edit)
+        bubble.text_label.hide()
+        edit.setFocus()
+
+        def cancel_edit():
+            edit.deleteLater()
+            bubble.text_label.show()
+            bubble._editing = False
+
+        def save_edit():
+            new_text = edit.toPlainText().strip()
+            edit.deleteLater()
+            bubble.text_label.show()
+            bubble._editing = False
+            if new_text and new_text != old_text:
+                history[idx]["content"] = new_text
+                del history[idx + 1:]
+                save_settings(SETTINGS)
+                self.render_ai_chat_history(chat_index)
+                self._send_ai_request(chat_index)
+            else:
+                import markdown
+                bubble.set_text(markdown.markdown(old_text, extensions=['fenced_code', 'tables']))
+
+        def edit_keypress(e):
+            if e.key() == Qt.Key_Escape:
+                cancel_edit()
+                return True
+            if e.key() in (Qt.Key_Return, Qt.Key_Enter) and not (e.modifiers() & Qt.ShiftModifier):
+                save_edit()
+                return True
+            return QTextEdit.keyPressEvent(edit, e)
+
+        edit.keyPressEvent = edit_keypress
+
+    def _send_ai_request(self, chat_index):
+        ui = self.ai_chat_ui[chat_index]
+        if not self.ai_can_send:
+            return
+        ui["input_area"].setEnabled(False)
+        ui["send_btn"].setEnabled(False)
+        ui["stop_btn"].setVisible(True)
+        self.ai_can_send = False
+        ui["input_area"].clear()
+
+        messages = self._build_ai_messages(chat_index)
+        active_preset = SETTINGS["ai_presets"][SETTINGS["ai_active_preset_index"]]
+        self._current_ai_worker = AIStreamWorker(messages, temperature=active_preset["creativity"] / 100.0)
+        self._current_ai_worker.signals.chunk.connect(lambda chunk: self.on_ai_chunk_received(chunk, chat_index))
+        self._current_ai_worker.signals.finished.connect(lambda full_response: self.on_ai_finished(full_response, chat_index))
+        self._current_ai_worker.signals.error.connect(self.on_ai_error)
+        self.threadpool.start(self._current_ai_worker)
+
+        loading_bubble = ChatBubble(_tr("Thinking..."), is_user=False)
+        ui["chat_list"].add_bubble(loading_bubble)
+        ui["_streaming_bubble"] = loading_bubble
+
+    def _retry_ai_message(self, chat_index, bubble):
+        history = SETTINGS["ai_chats"][chat_index]["history"]
+        idx = bubble.msg_index
+        if idx < 0 or idx >= len(history) or history[idx]["role"] != "user":
+            return
+        user_content = history[idx]["content"]
+        del history[idx:]
+        history.append({"role": "user", "content": user_content})
+        save_settings(SETTINGS)
+        self._rebuild_chat_display(chat_index)
+        self._send_ai_request(chat_index)
 
     def _rebuild_chat_display(self, chat_index):
-        if chat_index in self.ai_chat_ui:
-            self.render_ai_chat_history(chat_index)
+        self.render_ai_chat_history(chat_index)
 
     def process_ai_actions(self, response, chat_index):
-        search_match = re.search(r'\{+SEARCH: (.*?)\}+', response, re.DOTALL)
+        search_match = re.search(r'\{+(?:SEARCH|search):\s*(.*?)\}+', response, re.DOTALL)
         if search_match:
             params_str = search_match.group(1).replace('\n', ' ').strip()
             tags = params_str
             sort = None
             page = 0
-            
             if ',' in params_str:
                 parts = [p.strip() for p in params_str.split(',')]
                 tags = parts[0]
                 for part in parts[1:]:
-                    if part.startswith('sort='): sort = part.split('=')[1]
+                    if part.startswith('sort='): sort = part.split('=', 1)[1]
                     elif part.startswith('page='):
-                        try: page = int(part.split('=')[1]) - 1
+                        try: page = int(part.split('=', 1)[1]) - 1
                         except: page = 0
-            
             self.perform_ai_image_search(tags, chat_index, sort=sort, page=page)
-            
-        setting_match = re.search(r'\{+UPDATE_SETTING: (.*?)=(.*?)\}+', response)
-        if setting_match:
-            key, val = setting_match.group(1).strip(), setting_match.group(2).strip()
-            if key in SETTINGS:
-                if val.lower() == "true": val = True
-                elif val.lower() == "false": val = False
-                
-                SETTINGS[key] = val
-                save_settings(SETTINGS)
-                self.reapply_settings() 
-                
-        if "{RANDOM_FAVORITE}" in response:
+
+        for match in re.finditer(r'\{+(?:SET|UPDATE_SETTING|update_setting|set):\s*([^}]+)\}+', response):
+            inner = match.group(1).strip()
+            if '=' not in inner:
+                continue
+            key = inner.split('=', 1)[0].strip()
+            raw_val = inner.split('=', 1)[1].strip()
+
+            if key not in SETTINGS:
+                continue
+
+            val = self._coerce_setting_value(key, raw_val)
+            if val is not None:
+                self._ai_pending_settings[key] = val
+
+        if "{RANDOM_FAVORITE}" in response or "{random_favorite}" in response.lower():
             all_favs = []
             for cat in self.favorites.values(): all_favs.extend(cat.values())
             if all_favs:
                 post = random.choice(all_favs)
                 self.open_post_full(post)
 
-        similar_match = re.search(r'\{+SHOW_SIMILAR: (.*?)\}+', response)
+        for match in re.finditer(r'\{+(?:OPEN_TAB|open_tab):\s*([^}]+)\}+', response):
+            tab_name = match.group(1).strip().lower()
+            tab_map = {"home": 0, "browser": 1, "favorites": 2, "downloads": 3, "hentai": 4, "manga": 5, "minigames": 6, "ai": 7}
+            idx = tab_map.get(tab_name)
+            if idx is not None:
+                self.tabs.setCurrentIndex(idx)
+
+        if "{HENTAI_RANDOM}" in response or "{hentai_random}" in response.lower():
+            self.tabs.setCurrentWidget(self.hentai_tab)
+            self.random_hentai()
+
+        for match in re.finditer(r'\{+(?:HENTAI_SEARCH|hentai_search):\s*([^}]+)\}+', response):
+            query = match.group(1).strip().strip('"\'')
+            self._ai_hentai_search(query, chat_index)
+
+        for match in re.finditer(r'\{+(?:MANGA_SEARCH|manga_search):\s*([^}]+)\}+', response):
+            query = match.group(1).strip().strip('"\'')
+            self._ai_manga_search(query, chat_index)
+
+        for match in re.finditer(r'\{+(?:HENTAI_TRENDING|hentai_trending):\s*(\d*)\}+', response):
+            count_str = match.group(1).strip()
+            count = int(count_str) if count_str.isdigit() else 8
+            self._ai_hentai_trending(count, chat_index)
+
+        for match in re.finditer(r'\{+(?:DOWNLOAD|download):\s*([^}]+)\}+', response):
+            inner = match.group(1).strip()
+            tags = inner
+            count = 5
+            if ',' in inner:
+                parts = [p.strip() for p in inner.split(',')]
+                tags = parts[0]
+                for part in parts[1:]:
+                    if part.startswith('count='):
+                        try: count = int(part.split('=', 1)[1])
+                        except: pass
+            self._ai_download_posts(tags, count, chat_index)
+
+        for match in re.finditer(r'\{+(?:FAVORITE_ADD|favorite_add):\s*([^}]+)\}+', response):
+            inner = match.group(1).strip()
+            category = "Uncategorized"
+            count = 5
+            tags = inner
+            if '|' in inner:
+                parts = [p.strip() for p in inner.split('|')]
+                tags = parts[0]
+                for part in parts[1:]:
+                    if part.startswith('count='):
+                        try: count = int(part.split('=', 1)[1])
+                        except: pass
+                    elif part.startswith('cat='):
+                        category = part.split('=', 1)[1].strip()
+            self._ai_favorite_add(tags, category, count, chat_index)
+
+        for match in re.finditer(r'\{+(?:FAVORITE_REMOVE|favorite_remove):\s*(\d+)\}+', response):
+            post_id = match.group(1).strip()
+            self._ai_favorite_remove(post_id, chat_index)
+
+        for match in re.finditer(r'\{+(?:FAVORITE_CREATE|favorite_create):\s*([^}]+)\}+', response):
+            name = match.group(1).strip().strip('"\'')
+            self._ai_favorite_create(name, chat_index)
+
+        for match in re.finditer(r'\{+(?:FAVORITE_RENAME|favorite_rename):\s*([^}]+)\}+', response):
+            inner = match.group(1).strip()
+            if ',' in inner:
+                parts = [p.strip().strip('"\'') for p in inner.split(',', 1)]
+                old_name, new_name = parts[0], parts[1]
+                self._ai_favorite_rename(old_name, new_name, chat_index)
+
+        for match in re.finditer(r'\{+(?:FAVORITE_DELETE|favorite_delete):\s*([^}]+)\}+', response):
+            name = match.group(1).strip().strip('"\'')
+            self._ai_favorite_delete(name, chat_index)
+
+        for match in re.finditer(r'\{+(?:FAVORITE_MERGE|favorite_merge):\s*([^}]+)\}+', response):
+            inner = match.group(1).strip()
+            if ',' in inner:
+                parts = [p.strip().strip('"\'') for p in inner.split(',', 1)]
+                source, target = parts[0], parts[1]
+                self._ai_favorite_merge(source, target, chat_index)
+
+        for match in re.finditer(r'\{+(?:CURATE|curate):\s*([^}]+)\}+', response):
+            tags = match.group(1).strip()
+            self._ai_curate_profile(tags, chat_index)
+
+        similar_match = re.search(r'\{+(?:SHOW_SIMILAR|show_similar):\s*([^}]+)\}+', response)
         if similar_match:
             post_id = similar_match.group(1).strip()
             post = self._find_post_by_id_globally(post_id)
@@ -4150,11 +5175,43 @@ class GelDanApp(QWidget):
                 search_tags = " ".join(tags.split()[:5])
                 self.perform_ai_image_search(search_tags, chat_index)
 
+    def _coerce_setting_value(self, key, raw_val):
+        raw_val = raw_val.strip().strip('"').strip("'")
+        existing = SETTINGS.get(key)
+
+        if existing is None:
+            if raw_val.lower() in ("true", "false"):
+                return raw_val.lower() == "true"
+            try: return int(raw_val)
+            except ValueError:
+                try: return float(raw_val)
+                except ValueError: return raw_val
+
+        if isinstance(existing, bool):
+            return raw_val.lower() in ("true", "1", "yes", "on")
+
+        if isinstance(existing, int):
+            try: return int(raw_val)
+            except ValueError: return None
+
+        if isinstance(existing, float):
+            try: return float(raw_val)
+            except ValueError: return None
+
+        if isinstance(existing, list):
+            if raw_val:
+                return [s.strip() for s in raw_val.split(',') if s.strip()]
+            return []
+
+        if isinstance(existing, str):
+            return raw_val
+
+        return raw_val
+
     def _get_app_stats_for_ai(self):
         fav_count = sum(len(posts) for posts in self.favorites.values())
         down_count = len(self.downloads_data)
         active_sources = SETTINGS.get("enabled_sources", [])
-        
         recent_searches = self.search_history[:10] if hasattr(self, 'search_history') else []
         last_post_info = None
         if hasattr(self, 'last_selected') and self.last_selected:
@@ -4163,7 +5220,6 @@ class GelDanApp(QWidget):
                 "tags": self.last_selected.get("tags", ""),
                 "rating": self.last_selected.get("rating", "unknown")
             }
-
         return {
             "favorites_count": fav_count,
             "downloads_count": down_count,
@@ -4179,24 +5235,64 @@ class GelDanApp(QWidget):
         base_persona = preset.get("persona", "")
         stats = self._get_app_stats_for_ai()
         pref_tags = SETTINGS.get("preferred_tags", "").replace("\n", ", ")
-        
+
+        settable_keys = [
+            "active_theme", "allow_explicit", "allow_loli_shota", "allow_bestiality", "allow_guro",
+            "incognito_mode", "show_download_notification", "enable_recommendations",
+            "grid_columns", "thumbnail_size", "auto_scale_grid", "potato_mode",
+            "convert_gifs_to_webp",
+            "window_mode", "window_size_preset", "custom_window_width", "custom_window_height",
+            "preferred_tags", "blacklisted_tags",
+            "posts_per_page", "cpu_limit", "ram_limit", "temp_cleanup_minutes",
+            "language",
+        ]
+        settings_flat = "\n".join(
+            f"  {k} = {SETTINGS.get(k, '???')} (type: {type(SETTINGS.get(k)).__name__})"
+            for k in settable_keys
+        )
+
+        enabled = SETTINGS.get("enabled_sources", [])
+        themes = ["Dark (Default)", "Light (Default)"] + list(self.custom_themes.keys())
+        from datetime import datetime
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         context = f"""
 [APP_CONTEXT]
-Current state of the application:
-- Favorites: {stats['favorites_count']} items across {len(self.favorites)} categories.
-- Downloads: {stats['downloads_count']} files in local storage.
-- Active Sources: {", ".join(stats['active_sources'])}
-- Settings: Theme={stats['current_theme']}, Incognito={stats['incognito_mode']}, NSFW={stats['explicit_allowed']}
-- User Preferred Tags: {pref_tags}
+- Current time: {now}
+- Favorites: {stats['favorites_count']} items in {len(self.favorites)} categories
+- Downloads: {stats['downloads_count']} files
+- Active Sources: {", ".join(enabled)}
+- Available Themes: {", ".join(themes)}
+- Current Theme: {stats['current_theme']}
+- Preferred Tags: {pref_tags}
+- Incognito: {stats['incognito_mode']}, NSFW: {stats['explicit_allowed']}
 
-[CAPABILITIES]
-- To search for images, output: {{SEARCH: tags, sort=random, page=1}}
-- Available sort options: "random", "score", "id_desc" (newest), "id_asc" (oldest).
-- To change a setting, output: {{UPDATE_SETTING: key=value}}
-- To show a random post from favorites, output: {{RANDOM_FAVORITE}}
-- To search for images similar to one the user is looking at, output: {{SHOW_SIMILAR: post_id}}
-- To find videos, animations, or GIFs, always include relevant tags in your search: "video", "animation", "animated", or "animated_gif". For example: {{SEARCH: cat_girl video, sort=random}}
-- You are an expert in anime, manga, and booru-style imageboards.
+[SETTINGS_YOU_CAN_CHANGE]
+{settings_flat}
+  enabled_sources = {enabled} (type: list, comma-separated)
+
+[COMMANDS - put these AFTER your response, they are hidden]
+- Search images: {{SEARCH: tags, sort=random, page=1}}
+- Change setting: {{SET: key=value}}
+- Open a tab: {{OPEN_TAB: browser|hentai|manga|favorites|downloads|ai|home|minigames}}
+- Search hentai: {{HENTAI_SEARCH: keyword}} — searches by title, tags, or any keyword. Use descriptive keywords (tags, genre, character names).
+- Trending hentai: {{HENTAI_TRENDING: count}} — fetch currently popular hentai titles (omit count for default 8).
+- Random hentai: {{HENTAI_RANDOM}}
+- Search manga: {{MANGA_SEARCH: title}} — searches MangaDex by exact or partial title. Use the real manga title, not tags.
+- Download posts: {{DOWNLOAD: tags, count=N}} — searches images by tags and downloads N of them.
+- Favorite posts: {{FAVORITE_ADD: tags | count=N, cat=CategoryName}} — searches and favorites posts.
+- Remove favorite: {{FAVORITE_REMOVE: post_id}}
+- Create category: {{FAVORITE_CREATE: name}}
+- Rename category: {{FAVORITE_RENAME: old, new}}
+- Delete category: {{FAVORITE_DELETE: name}}
+- Merge categories: {{FAVORITE_MERGE: source, target}}
+- Curate profile: {{CURATE: tags}} — sets preferred tags for autosuggest based on user's taste.
+- Random favorite: {{RANDOM_FAVORITE}}
+- Show similar: {{SHOW_SIMILAR: post_id}}
+- Sort options: random, score, id_desc, id_asc
+- For videos/GIFs add "video" or "animated" to search tags
+- You are an expert in anime, manga, and booru imageboards
+- Search the correct terms. If you don't know what content exists, use {{HENTAI_TRENDING:}} to discover available hentai first.
+- NEVER show command syntax in your visible text. Use them only after your message.
 """
         return f"{base_persona}\n\n{context}"
 
@@ -4210,18 +5306,322 @@ Current state of the application:
             if p.get('id') == post_id: return p
         return None
 
+    def _ai_hentai_search(self, query, chat_index):
+        ui = self.ai_chat_ui[chat_index]
+        status = ChatBubble(_tr("Searching hentai: {query}...").format(query=query), is_user=False)
+        ui["chat_list"].add_bubble(status)
+
+        def on_results(results, err):
+            if err:
+                ui["chat_list"].add_bubble(ChatBubble(_tr("Hentai search error: {e}").format(e=err), is_user=False))
+                return
+            refs = []
+            for item in (results or []):
+                if len(refs) >= 6:
+                    break
+                post = self._adapt_hhaven_post(item)
+                if not post:
+                    continue
+                name = post["hentai_title"]
+                cover = post["preview_url"]
+                ref_data = {"type": "hentai", "slug": post["hentai_slug"], "post": post, "source_url": post.get("source_post_url", ""), "name": name, "cover": cover}
+                refs.append(ref_data)
+                pixmap = QPixmap()
+                if cover:
+                    try:
+                        img_data = requests.get(cover, timeout=10).content
+                        pixmap.loadFromData(img_data)
+                    except Exception:
+                        pass
+                card = ChatRefCard(name, pixmap if not pixmap.isNull() else None, ref_data)
+                card.clicked.connect(lambda rd=ref_data: self._on_ai_ref_clicked(rd))
+                ui["chat_list"].add_bubble(card)
+            if refs:
+                history = SETTINGS["ai_chats"][chat_index]["history"]
+                for msg in reversed(history):
+                    if msg["role"] == "assistant":
+                        msg["hentai_results"] = refs
+                        break
+                save_settings(SETTINGS)
+            if not refs:
+                ui["chat_list"].add_bubble(ChatBubble(_tr("No hentai found."), is_user=False))
+
+        worker = ApiWorker(_do_hhaven_fetch, "search", 0, 6, query)
+        worker.signals.finished.connect(on_results)
+        self.threadpool.start(worker)
+
+    def _ai_manga_search(self, query, chat_index):
+        ui = self.ai_chat_ui[chat_index]
+        status = ChatBubble(_tr("Searching manga: {query}...").format(query=query), is_user=False)
+        ui["chat_list"].add_bubble(status)
+
+        def do_manga_search(query, limit=6):
+            results = []
+            try:
+                params = {"limit": limit, "offset": 0, "includes[]": ["cover_art"], "title": query, "order[relevance]": "desc"}
+                resp = requests.get("https://api.mangadex.org/manga", params=params, timeout=15)
+                resp.raise_for_status()
+                payload = resp.json()
+                for item in payload.get("data", []) or []:
+                    manga_id = item.get("id")
+                    attrs = item.get("attributes") or {}
+                    titles = attrs.get("title") or {}
+                    title = titles.get("en") or next(iter(titles.values()), manga_id)
+                    cover_rel = [r for r in (item.get("relationships") or []) if r.get("type") == "cover_art"]
+                    cover_url = None
+                    if cover_rel:
+                        fn = (cover_rel[0].get("attributes") or {}).get("fileName")
+                        if fn:
+                            cover_url = f"https://uploads.mangadex.org/covers/{manga_id}/{fn}"
+                    results.append({"id": manga_id, "title": title, "url": f"https://mangadex.org/title/{manga_id}", "cover": cover_url})
+                return results
+            except Exception:
+                return results
+
+        def on_results(results, err):
+            if err:
+                ui["chat_list"].add_bubble(ChatBubble(_tr("Manga search error: {e}").format(e=err), is_user=False))
+                return
+            refs = []
+            for item in (results or []):
+                if len(refs) >= 6:
+                    break
+                title = item.get("title", "Untitled")
+                cover = item.get("cover")
+                ref_data = {"type": "manga", "title": title, "url": item.get("url", ""), "manga_id": item.get("id"), "cover": cover}
+                refs.append(ref_data)
+                pixmap = QPixmap()
+                if cover:
+                    try:
+                        img_data = requests.get(cover, timeout=10).content
+                        pixmap.loadFromData(img_data)
+                    except Exception:
+                        pass
+                card = ChatRefCard(title, pixmap if not pixmap.isNull() else None, ref_data)
+                card.clicked.connect(lambda rd=ref_data: self._on_ai_ref_clicked(rd))
+                ui["chat_list"].add_bubble(card)
+            if refs:
+                history = SETTINGS["ai_chats"][chat_index]["history"]
+                for msg in reversed(history):
+                    if msg["role"] == "assistant":
+                        msg["manga_results"] = refs
+                        break
+                save_settings(SETTINGS)
+            if not refs:
+                ui["chat_list"].add_bubble(ChatBubble(_tr("No manga found."), is_user=False))
+
+        worker = ApiWorker(do_manga_search, query, 6)
+        worker.signals.finished.connect(on_results)
+        self.threadpool.start(worker)
+
+    def _ai_hentai_trending(self, count, chat_index):
+        ui = self.ai_chat_ui[chat_index]
+        status = ChatBubble(_tr("Fetching trending hentai..."), is_user=False)
+        ui["chat_list"].add_bubble(status)
+
+        def on_results(results, err):
+            if err:
+                ui["chat_list"].add_bubble(ChatBubble(_tr("Error: {e}").format(e=err), is_user=False))
+                return
+            names = []
+            for item in (results or []):
+                if not isinstance(item, dict):
+                    continue
+                title = item.get("title")
+                if isinstance(title, dict):
+                    title = title.get("rendered") or title.get("raw") or ""
+                title = re.sub(r"<[^>]+>", "", str(title or "")).strip()
+                if title:
+                    names.append(title)
+                if len(names) >= count:
+                    break
+            if names:
+                msg = _tr("Trending hentai: {list}").format(list=", ".join(names))
+            else:
+                msg = _tr("No trending hentai found.")
+            ui["chat_list"].add_bubble(ChatBubble(msg, is_user=False))
+
+        worker = ApiWorker(_do_hhaven_fetch, "trending", 0, count)
+        worker.signals.finished.connect(on_results)
+        self.threadpool.start(worker)
+
+    def _ai_download_posts(self, tags, count, chat_index):
+        ui = self.ai_chat_ui[chat_index]
+        ui["chat_list"].add_bubble(ChatBubble(_tr("Searching for images to download: {tags}...").format(tags=tags), is_user=False))
+        from snekbooru.api.booru import fetch_multiple_sources
+        from snekbooru.core.downloader import download_media
+
+        def do_search(tags, count):
+            detected_sources = None
+            from snekbooru.api.booru import detect_source_from_query
+            try:
+                detected_sources = detect_source_from_query(tags)
+            except Exception:
+                detected_sources = None
+            posts, _ = fetch_multiple_sources(detected_sources, tags, count + 5, 0, self.custom_boorus)
+            return posts[:count]
+
+        def on_search(data, err):
+            if err:
+                ui["chat_list"].add_bubble(ChatBubble(_tr("Download search error: {e}").format(e=err), is_user=False))
+                return
+            downloaded = 0
+            errors = 0
+            for post in (data or []):
+                try:
+                    success, msg = download_media(post, self)
+                    if success:
+                        downloaded += 1
+                    else:
+                        errors += 1
+                except Exception:
+                    errors += 1
+                if downloaded >= count:
+                    break
+            if downloaded:
+                self.refresh_downloads_grid()
+            ui["chat_list"].add_bubble(ChatBubble(
+                _tr("Downloaded {ok} posts{err}.").format(ok=downloaded, err=f" ({errors} failed)" if errors else ""),
+                is_user=False
+            ))
+
+        worker = ApiWorker(do_search, tags, count)
+        worker.signals.finished.connect(on_search)
+        self.threadpool.start(worker)
+
+    def _ai_favorite_add(self, tags, category, count, chat_index):
+        ui = self.ai_chat_ui[chat_index]
+        ui["chat_list"].add_bubble(ChatBubble(_tr("Searching to favorite: {tags}...").format(tags=tags), is_user=False))
+        from snekbooru.api.booru import fetch_multiple_sources
+
+        if category not in self.favorites:
+            self.favorites[category] = {}
+            save_favorites(self.favorites)
+
+        def do_search(tags, count):
+            from snekbooru.api.booru import detect_source_from_query
+            detected = None
+            try: detected = detect_source_from_query(tags)
+            except: pass
+            posts, _ = fetch_multiple_sources(detected, tags, count + 5, 0, self.custom_boorus)
+            return posts[:count]
+
+        def on_search(data, err):
+            if err:
+                ui["chat_list"].add_bubble(ChatBubble(_tr("Favorite search error: {e}").format(e=err), is_user=False))
+                return
+            added = 0
+            for post in (data or []):
+                pid = post.get("id")
+                if pid and pid not in self.favorites.get(category, {}):
+                    self.favorites[category][pid] = self._sanitize_post_for_storage(post)
+                    added += 1
+            if added:
+                save_favorites(self.favorites)
+                self.populate_favorite_categories()
+            ui["chat_list"].add_bubble(ChatBubble(
+                _tr("Favorited {n} posts in '{cat}'.").format(n=added, cat=category), is_user=False
+            ))
+
+        worker = ApiWorker(do_search, tags, count)
+        worker.signals.finished.connect(on_search)
+        self.threadpool.start(worker)
+
+    def _ai_favorite_remove(self, post_id, chat_index):
+        ui = self.ai_chat_ui[chat_index]
+        removed = False
+        for cat in list(self.favorites.keys()):
+            if post_id in self.favorites[cat]:
+                del self.favorites[cat][post_id]
+                removed = True
+                break
+        if removed:
+            save_favorites(self.favorites)
+            self.populate_favorite_categories()
+            ui["chat_list"].add_bubble(ChatBubble(_tr("Removed post {id} from favorites.").format(id=post_id), is_user=False))
+        else:
+            ui["chat_list"].add_bubble(ChatBubble(_tr("Post {id} not found in favorites.").format(id=post_id), is_user=False))
+
+    def _ai_favorite_create(self, name, chat_index):
+        ui = self.ai_chat_ui[chat_index]
+        if name in self.favorites:
+            ui["chat_list"].add_bubble(ChatBubble(_tr("Category '{name}' already exists.").format(name=name), is_user=False))
+            return
+        self.favorites[name] = {}
+        save_favorites(self.favorites)
+        self.populate_favorite_categories()
+        ui["chat_list"].add_bubble(ChatBubble(_tr("Created favorite category '{name}'.").format(name=name), is_user=False))
+
+    def _ai_favorite_rename(self, old_name, new_name, chat_index):
+        ui = self.ai_chat_ui[chat_index]
+        if old_name not in self.favorites:
+            ui["chat_list"].add_bubble(ChatBubble(_tr("Category '{name}' not found.").format(name=old_name), is_user=False))
+            return
+        if new_name in self.favorites:
+            ui["chat_list"].add_bubble(ChatBubble(_tr("Category '{name}' already exists.").format(name=new_name), is_user=False))
+            return
+        self.favorites[new_name] = self.favorites.pop(old_name)
+        save_favorites(self.favorites)
+        self.populate_favorite_categories()
+        ui["chat_list"].add_bubble(ChatBubble(_tr("Renamed '{old}' to '{new}'.").format(old=old_name, new=new_name), is_user=False))
+
+    def _ai_favorite_delete(self, name, chat_index):
+        ui = self.ai_chat_ui[chat_index]
+        if name not in self.favorites or name == "Uncategorized":
+            ui["chat_list"].add_bubble(ChatBubble(_tr("Cannot delete '{name}'.").format(name=name), is_user=False))
+            return
+        posts_to_move = self.favorites.pop(name)
+        self.favorites["Uncategorized"].update(posts_to_move)
+        save_favorites(self.favorites)
+        self.populate_favorite_categories()
+        ui["chat_list"].add_bubble(ChatBubble(_tr("Deleted '{name}', posts moved to Uncategorized.").format(name=name), is_user=False))
+
+    def _ai_favorite_merge(self, source, target, chat_index):
+        ui = self.ai_chat_ui[chat_index]
+        if source not in self.favorites or target not in self.favorites:
+            ui["chat_list"].add_bubble(ChatBubble(_tr("One or both categories not found."), is_user=False))
+            return
+        self.favorites[target].update(self.favorites.pop(source))
+        save_favorites(self.favorites)
+        self.populate_favorite_categories()
+        ui["chat_list"].add_bubble(ChatBubble(_tr("Merged '{src}' into '{tgt}'.").format(src=source, tgt=target), is_user=False))
+
+    def _ai_curate_profile(self, tags, chat_index):
+        ui = self.ai_chat_ui[chat_index]
+        SETTINGS["preferred_tags"] = tags
+        save_settings(SETTINGS)
+        self.tag_profile["ai_curated"] = tags
+        save_tag_profile(self.tag_profile)
+        ui["chat_list"].add_bubble(ChatBubble(_tr("Profile curated with: {tags}").format(tags=tags), is_user=False))
+
+    def _on_ai_ref_clicked(self, ref_data):
+        rtype = ref_data.get("type", "")
+        if rtype == "hentai":
+            post = ref_data.get("post")
+            if post:
+                self.tabs.setCurrentWidget(self.hentai_tab)
+                self.hentai_search_input.setText(ref_data.get("name", ""))
+                self.search_hentai()
+        elif rtype == "manga":
+            title = ref_data.get("title", "")
+            if title:
+                self.tabs.setCurrentWidget(self.manga_tab)
+                self.manga_search_input.setText(title)
+                self.apply_manga_filter()
+
     def perform_ai_image_search(self, tags, chat_index, is_fallback=False, original_tags=None, retry_count=0, sort=None, page=0):
         ui = self.ai_chat_ui[chat_index]
-        
+
         search_tags = tags
         if sort == "random": search_tags += " sort:random"
         elif sort == "score": search_tags += " sort:score"
         elif sort == "id_asc": search_tags += " sort:id:asc"
-        
+
         if not is_fallback:
-            ui["history_browser"].append(f"<i>Searching database for: {tags} (page {page+1}, sort: {sort or 'default'})...</i><br>")
+            status = ChatBubble(_tr("Searching: {tags}...").format(tags=tags), is_user=False)
+            ui["chat_list"].add_bubble(status)
             original_tags = tags
-        
+
         tags_lower = tags.lower()
         explicit_keywords = [
             'porn', 'hentai', 'xxx', 'nsfw', 'explicit', 'adult',
@@ -4229,130 +5629,101 @@ Current state of the application:
             'rape', 'yaoi', 'yuri', 'futanari', 'futa', 'incest',
             'anal', 'cum', 'cock', 'pussy', 'dick', 'dildo', 'vibrator'
         ]
-        
+
         has_explicit_request = any(keyword in tags_lower for keyword in explicit_keywords)
-        
+
         search_tags = tags
         if not has_explicit_request and 'rating:' not in tags_lower:
             search_tags = f"{tags} rating:safe" if tags.strip() else "rating:safe"
-        
+
         detected_sources = detect_source_from_query(tags)
-        
+
         media_preference = None
         if any(ext in tags_lower for ext in ['gif', 'video', 'webm', 'mp4', 'animated']):
             media_preference = 'video'
         elif any(ext in tags_lower for ext in ['png', 'jpg', 'jpeg', 'image', 'static']):
             media_preference = 'image'
-        
-        enabled_sources = detected_sources
-        worker = ApiWorker(fetch_multiple_sources, enabled_sources, search_tags, 1, page, self.custom_boorus)
+
+        result_limit = 6
+        worker = ApiWorker(fetch_multiple_sources, detected_sources, search_tags, result_limit, page, self.custom_boorus)
         worker.signals.finished.connect(lambda data, err: self.on_ai_search_results(data, err, chat_index, media_preference, original_tags, retry_count))
         self.threadpool.start(worker)
 
+    def reset_ai_cooldown(self, chat_index):
+        self.ai_can_send = True
+        self._current_ai_worker = None
+        if chat_index in self.ai_chat_ui:
+            ui = self.ai_chat_ui[chat_index]
+            ui["input_area"].setEnabled(True)
+            ui["send_btn"].setEnabled(True)
+            ui["stop_btn"].setVisible(False)
+            ui["input_area"].setFocus()
+
+    def on_ai_error(self, error_message):
+        active_index = self.ai_chat_tabs.currentIndex()
+        if active_index >= 0 and active_index in self.ai_chat_ui:
+            ui = self.ai_chat_ui[active_index]
+            error_bubble = ChatBubble(_tr("Error: {error}").format(error=error_message), is_user=False)
+            ui["chat_list"].add_bubble(error_bubble)
+            ui.pop("_streaming_bubble", None)
+            self.reset_ai_cooldown(active_index)
+
     def on_ai_search_results(self, data, err, chat_index, media_preference=None, original_tags=None, retry_count=0):
+        if chat_index not in self.ai_chat_ui:
+            return
         ui = self.ai_chat_ui[chat_index]
         if err:
-            ui["history_browser"].append(f"<b style='color:red;'>Search Error: {err}</b><br>")
+            status_bubble = ChatBubble(_tr("Search Error: {error}").format(error=err), is_user=False)
+            ui["chat_list"].add_bubble(status_bubble)
             return
 
         posts, _ = data
         if not posts:
-            if original_tags is None:
-                original_tags = ""  
-            
-            fallback_searches = []
-            if retry_count == 0 and original_tags:
+            if retry_count < 1 and original_tags:
                 fallback = original_tags.replace(" different", "").replace(" another", "").replace(" alt ", " ").strip()
                 if fallback and fallback != original_tags:
-                    fallback_searches.append(fallback)
-                
-                first_word = original_tags.split()[0] if original_tags.split() else ""
-                if first_word and first_word != fallback:
-                    fallback_searches.append(first_word)
-            
-            if fallback_searches:
-                ui["history_browser"].append(f"<i>No results for '{original_tags}', trying: {fallback_searches[0]}...</i><br>")
-                self.perform_ai_image_search(fallback_searches[0], chat_index, is_fallback=True, original_tags=original_tags, retry_count=retry_count+1)
-                return
-            
-            ui["history_browser"].append(f"<i>No images found, showing popular anime...</i><br>")
-            self.perform_ai_image_search("anime girl", chat_index, is_fallback=True, original_tags=original_tags, retry_count=retry_count+1)
+                    self.perform_ai_image_search(fallback, chat_index, is_fallback=True, original_tags=original_tags, retry_count=retry_count+1)
+                    return
+            status_bubble = ChatBubble(_tr("No images found."), is_user=False)
+            ui["chat_list"].add_bubble(status_bubble)
             return
 
-        if chat_index not in self.ai_chat_message_count:
-            self.ai_chat_message_count[chat_index] = len(SETTINGS.get("ai_chats", [{}])[chat_index].get("history", []))
-        message_index = self.ai_chat_message_count[chat_index]
-        
-        html = "<div style='margin-top: 5px;' id='ai_search_results'>"
-        html += "</div><br>"
-        
-        ui["history_browser"].append(html)
-        ui["history_browser"].moveCursor(QTextCursor.End)
-        
-        if posts:
-            post = posts[0]
+        result_bubble = ChatBubble("", is_user=False)
+        for post in posts[:6]:
             self.ai_search_results[post['id']] = post
             preview = post.get('preview_url')
-            file_url = post.get('file_url')
             file_ext = post.get('file_ext', '').lower()
-            
             is_video = file_ext in ['mp4', 'webm', 'gif', 'mov', 'avi']
-            
             if preview:
                 worker = ImageWorker(preview, post)
-                worker.signals.finished.connect(lambda pix, p=post, idx=chat_index, msg_idx=message_index: self.on_ai_thumbnail_loaded(pix, p, idx, msg_idx))
+                worker.signals.finished.connect(lambda pix, p=post, b=result_bubble: self._on_ai_search_image(pix, p, b))
                 self.threadpool.start(worker)
+        ui["chat_list"].add_bubble(result_bubble)
 
-    def on_ai_thumbnail_loaded(self, pixmap, post, chat_index, message_index=None):
-        if pixmap.isNull() or chat_index not in self.ai_chat_ui:
-            return
-        
-        ui = self.ai_chat_ui[chat_index]
-        history_browser = ui["history_browser"]
-        
-        from PyQt5.QtCore import QBuffer, QIODevice
+    def _on_ai_search_image(self, pixmap, post, bubble):
+        file_ext = post.get('file_ext', '').lower()
+        is_video = file_ext in ['mp4', 'webm', 'gif', 'mov', 'avi']
+        if pixmap and not pixmap.isNull():
+            chat_index = self.ai_chat_tabs.currentIndex()
+            if chat_index in self.ai_chat_ui:
+                res_data = {'post_id': post['id'], 'image_data': None, 'is_video': is_video}
+                img_bubble = ChatImageBubble(pixmap, res_data)
+                img_bubble.clicked.connect(lambda pd=res_data: self._open_ai_search_result(pd))
+                self.ai_chat_ui[chat_index]["chat_list"].add_bubble(img_bubble)
+
+        history = SETTINGS["ai_chats"][self.ai_chat_tabs.currentIndex()].get("history", [])
         buffer = QBuffer()
         buffer.open(QIODevice.WriteOnly)
         pixmap.save(buffer, "PNG")
         image_data = base64.b64encode(buffer.data()).decode()
-        
-        file_ext = post.get('file_ext', '').lower()
-        is_video = file_ext in ['mp4', 'webm', 'gif', 'mov', 'avi']
-
-        history = SETTINGS["ai_chats"][chat_index].get("history", [])
-        if history:
-            for msg in reversed(history):
-                if msg["role"] == "assistant":
-                    if "search_results" not in msg:
-                        msg["search_results"] = []
-                    msg["search_results"].append({
-                        'post_id': post['id'],
-                        'image_data': image_data,
-                        'is_video': is_video
-                    })
-                    break
-        
-        self.render_ai_chat_history(chat_index)
+        for msg in reversed(history):
+            if msg["role"] == "assistant":
+                if "search_results" not in msg:
+                    msg["search_results"] = []
+                res_data = {'post_id': post['id'], 'image_data': image_data, 'is_video': is_video}
+                msg["search_results"].append(res_data)
+                break
         save_settings(SETTINGS)
-
-    def reset_ai_cooldown(self, chat_index):
-        self.ai_can_send = True
-        if chat_index in self.ai_chat_ui:
-            ui = self.ai_chat_ui[chat_index]
-        self.ai_shared_input_area.setEnabled(True)
-        self.ai_shared_send_button.setEnabled(True)
-        self.ai_shared_input_area.setFocus()
-
-    def on_ai_error(self, error_message):
-        QMessageBox.critical(self, _tr("AI Error"), error_message)
-        active_index = self.ai_chat_tabs.currentIndex()
-        if active_index >= 0:
-            ui = self.ai_chat_ui[active_index]
-            ui["history_browser"].append(f"<b style='color:red;'>Error: {error_message}</b><hr>")
-            self.reset_ai_cooldown(active_index)
-            self.ai_shared_input_area.setEnabled(True)
-            self.ai_shared_send_button.setEnabled(True)
-            self.ai_shared_input_area.setFocus()
 
     def on_chat_anchor_clicked(self, url):
         url_str = url.toString()
@@ -4398,7 +5769,7 @@ Current state of the application:
             
             if preview_url:
                 try:
-                    response = requests.get(preview_url, headers={'User-Agent': USER_AGENT}, timeout=10)
+                    response = requests.get(preview_url, headers=get_media_headers(preview_url), timeout=10)
                     response.raise_for_status()
                     pix = QPixmap()
                     pix.loadFromData(response.content)
@@ -4413,7 +5784,7 @@ Current state of the application:
             if preview_url or file_url:
                 url_to_load = preview_url or file_url
                 try:
-                    response = requests.get(url_to_load, headers={'User-Agent': USER_AGENT}, timeout=10)
+                    response = requests.get(url_to_load, headers=get_media_headers(url_to_load), timeout=10)
                     pix = QPixmap()
                     pix.loadFromData(response.content)
                     
@@ -4498,6 +5869,8 @@ Current state of the application:
         else:
             cols = SETTINGS.get("grid_columns", 5)
             thumb_size = SETTINGS.get("thumbnail_size", 150)
+
+        posts = [p for p in posts if isinstance(p, dict)]
 
         for i, post in enumerate(posts):
             row, col = divmod(i, cols)
@@ -4673,6 +6046,51 @@ Current state of the application:
             f"Tags:\n{tags}"
         )
 
+    def _lazy_load_mikubooru_tags(self, post):
+        try:
+            source_url = post.get("source_post_url", "")
+        except AttributeError:
+            return
+        if "booru.funmaker.moe" not in source_url:
+            return
+        existing_tags = post.get("tags", "")
+        if isinstance(existing_tags, str) and existing_tags.strip():
+            return
+        if post.get("_tags_loading"):
+            return
+        post["_tags_loading"] = True
+
+        pid = post.get("id")
+        if not pid:
+            return
+
+        def _fetch():
+            try:
+                import requests as _r
+                resp = _r.get(
+                    f"https://booru.funmaker.moe/api/post/{pid}",
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                detail = resp.json()
+                tags_obj = detail.get("tags", {})
+                if isinstance(tags_obj, dict):
+                    return " ".join(tags_obj.keys()), None
+                return "", None
+            except Exception as e:
+                return None, str(e)
+
+        worker = ApiWorker(_fetch)
+        def on_done(data, err):
+            post["_tags_loading"] = False
+            if data and not err:
+                post["tags"] = data
+                if self.last_selected is post:
+                    self.info.setPlainText(self.format_post_info(post))
+        worker.signals.finished.connect(on_done)
+        self.threadpool.start(worker)
+
     def start_new_search(self):
         self.pid = 0
         self.search()
@@ -4682,6 +6100,20 @@ Current state of the application:
         if self.include_pref.isChecked():
             pref_tags = SETTINGS.get("preferred_tags", "").split()
             tags = " ".join(pref_tags) + " " + tags
+
+        if not self.is_incognito_window and SETTINGS.get("enable_recommendations", True) and hasattr(self, 'persona') and self.persona is not None:
+            try:
+                from snekbooru.common.constants import BORING_TAGS
+                from snekbooru.core.persona import top_affinity_tags
+                exclude = set(BORING_TAGS)
+                exclude.update(SETTINGS.get("blacklisted_tags", "").split())
+                persona_tags = top_affinity_tags(self.persona, limit=8, exclude=exclude)
+                existing = set(tags.split())
+                soft = [f"~{t}" for t in persona_tags if t not in existing and f"~{t}" not in tags]
+                if soft:
+                    tags = (tags + " " + " ".join(soft)).strip()
+            except Exception as e:
+                print(f"Error blending persona into search: {e}")
 
         if not SETTINGS.get("allow_explicit", False) and "rating:" not in tags:
             tags += " rating:safe"
@@ -4741,6 +6173,28 @@ Current state of the application:
         self.info.setPlainText(self.format_post_info(post))
         self.last_selected = post
         self.update_inspector_fav_button(post)
+        self._lazy_load_mikubooru_tags(post)
+        self._record_browse_open(post)
+
+    def _record_browse_open(self, post):
+        if not post or getattr(self, 'is_incognito_window', False):
+            return
+        if not hasattr(self, 'persona') or self.persona is None:
+            return
+        try:
+            category = find_post_in_favorites(post.get('id'), self.favorites)
+            active_tab = self.tabs.currentWidget()
+            context = 'browser'
+            if active_tab == self.favorites_tab:
+                context = 'favorites'
+            elif active_tab == self.hentai_tab:
+                context = 'hentai'
+            elif active_tab == self.manga_tab:
+                context = 'manga'
+            record_post_open(self.persona, post, context=context, category=category, dwell=0.0)
+            self._schedule_persona_save()
+        except Exception as e:
+            print(f"Error recording browse open: {e}")
 
     def next_page(self):
         self.pid += 1
@@ -4891,6 +6345,7 @@ Current state of the application:
             self.start_new_search()
 
     def open_post_full(self, post):
+        self._record_browse_open(post)
         active_tab = self.tabs.currentWidget()
         if active_tab == self.browser_tab:
             posts_list = self.posts
@@ -4925,8 +6380,13 @@ Current state of the application:
         from snekbooru.core.downloader import download_media
         success, message = download_media(post, self)
         if success:
+            if not getattr(self, 'is_incognito_window', False) and hasattr(self, 'persona') and self.persona is not None:
+                try:
+                    record_download(self.persona, post, _persona_source(post))
+                except Exception:
+                    pass
             if SETTINGS.get("show_download_notification", True):
-                QMessageBox.information(self, _tr("Download Complete"), message)
+                self._show_download_toast(message)
             else:
                 try:
                     self.status.setText(message)
@@ -4935,6 +6395,27 @@ Current state of the application:
         else:
             QMessageBox.warning(self, _tr("Download Failed"), message)
 
+    def _show_download_toast(self, message):
+        toast = QLabel(message, self)
+        toast.setStyleSheet("""
+            QLabel {
+                background-color: #2d2d2d;
+                color: #fff;
+                border: 1px solid #555;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-size: 13px;
+            }
+        """)
+        toast.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint)
+        toast.adjustSize()
+        screen_geo = QApplication.primaryScreen().availableGeometry()
+        x = screen_geo.right() - toast.width() - 20
+        y = screen_geo.bottom() - toast.height() - 40
+        toast.move(x, y)
+        toast.show()
+        QTimer.singleShot(3000, toast.deleteLater)
+
     def toggle_inspector_favorite(self):
         if self.last_selected:
             self.toggle_favorite(self.last_selected)
@@ -4942,7 +6423,7 @@ Current state of the application:
     def _sanitize_post_for_storage(self, post):
         clean_post = post.copy()
         
-        keys_to_remove = ["hh_object", "episode_obj", "pixmap", "movie"]
+        keys_to_remove = ["hh_object", "episode_obj", "pixmap", "movie", "hanime_data", "hanime_slug"]
         for key in keys_to_remove:
             if key in clean_post:
                 del clean_post[key]
@@ -5064,6 +6545,11 @@ Current state of the application:
             self.search_history = self.search_history[:50] 
             self.search_completer_model.setStringList(self.search_history)
             save_search_history(self.search_history)
+        if not getattr(self, 'is_incognito_window', False) and hasattr(self, 'persona') and self.persona is not None:
+            try:
+                record_search(self.persona, text)
+            except Exception:
+                pass
 
     def clear_search_history(self):
         self.search_history.clear()
@@ -5072,7 +6558,7 @@ Current state of the application:
         QMessageBox.information(self, _tr("History Cleared"), _tr("Search history has been cleared."))
 
     def fetch_recommendations(self):
-        self.reco_status_label.setText(_tr("Analyzing your favorites to find recommendations..."))
+        self.reco_status_label.setText(_tr("Analyzing your favorites and browsing habits to find recommendations..."))
         
         tag_counts = {}
         for category in self.favorites.values():
@@ -5083,6 +6569,20 @@ Current state of the application:
         from snekbooru.common.constants import BORING_TAGS
         for tag in BORING_TAGS:
             tag_counts.pop(tag, None)
+
+        if not getattr(self, 'is_incognito_window', False) and hasattr(self, 'persona') and self.persona is not None:
+            from snekbooru.core.persona import top_affinity_tags
+            blacklist_now = set(SETTINGS.get("blacklisted_tags", "").split())
+            blacklist_now.update(BORING_TAGS)
+            if not SETTINGS.get("allow_loli_shota", True):
+                blacklist_now.update(["loli", "shota"])
+            if not SETTINGS.get("allow_bestiality", False):
+                blacklist_now.add("bestiality")
+            if not SETTINGS.get("allow_guro", False):
+                blacklist_now.add("guro")
+            persona_tags = top_affinity_tags(self.persona, limit=25, exclude=blacklist_now)
+            for tag in persona_tags:
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
 
         sorted_tags = sorted(tag_counts.items(), key=lambda item: item[1], reverse=True)
         top_tags = [tag for tag, count in sorted_tags[:20]]
@@ -5242,6 +6742,8 @@ Current state of the application:
         for btn in [self.title_bar.minimize_btn, self.title_bar.maximize_btn, self.title_bar.close_btn]:
             btn.style().unpolish(btn); btn.style().polish(btn)
         self.title_bar.update_icons()
+        self.repaint()
+        QApplication.processEvents()
 
     def update_source_label(self):
         enabled_sources = SETTINGS.get("enabled_sources", ["Gelbooru"])
@@ -5272,6 +6774,11 @@ Current state of the application:
             save_tag_profile(self.tag_profile)
             save_favorites(self.favorites)
             save_highscores(self.highscores)
+            try:
+                if getattr(self, 'persona', None) is not None:
+                    save_persona(self.persona)
+            except Exception:
+                pass
 
         try:
             from snekbooru.core.temp_cache import purge_snekbooru_temp

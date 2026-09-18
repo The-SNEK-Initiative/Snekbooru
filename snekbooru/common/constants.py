@@ -15,21 +15,22 @@ RULE34_TAGS  = "https://api.rule34.xxx/autocomplete.php"
 HYPNOHUB_POSTS = "https://hypnohub.net/index.php?page=dapi&s=post&q=index&json=1"
 HYPNOHUB_TAGS  = "https://hypnohub.net/index.php?page=dapi&s=tag&q=index&json=1"
 ZEROCHAN_API = "https://www.zerochan.net"
+E621_POSTS = "https://e621.net/posts.json"
+E621_TAGS = "https://e621.net/tags.json"
+E926_POSTS = "https://e926.net/posts.json"
+E926_TAGS = "https://e926.net/tags.json"
+XBOORU_POSTS = "https://xbooru.com/index.php?page=dapi&s=post&q=index&json=1"
+XBOORU_TAGS  = "https://xbooru.com/index.php?page=dapi&s=tag&q=index&json=1"
+SAFEBOORU_POSTS = "https://safebooru.org/index.php?page=dapi&s=post&q=index&json=1"
+SAFEBOORU_TAGS  = "https://safebooru.org/index.php?page=dapi&s=tag&q=index&json=1"
+SZURUBOORU_POSTS = "https://szuru.libre.moe/api/posts"
+SZURUBOORU_TAGS  = "https://szuru.libre.moe/api/tags"
+HYBOORU_POSTS = "https://booru.funmaker.moe/api/post"
+HYBOORU_TAGS  = "https://booru.funmaker.moe/api/tags"
 
-WAIFU_PICS_API = "https://api.waifu.pics"
-WAIFU_PICS_SFW_CATEGORIES = [
-    "waifu", "neko", "shinobu", "megumin", "bully", "cuddle", "cry", "hug", "awoo",
-    "kiss", "lick", "pat", "smug", "bonk", "yeet", "blush", "smile", "wave",
-    "highfive", "handhold", "nom", "bite", "glomp", "slap", "kill", "kick",
-    "happy", "wink", "poke", "dance", "cringe"
-]
-WAIFU_PICS_NSFW_CATEGORIES = [
-    "waifu", "neko", "trap", "blowjob"
-]
-
-USER_AGENT = "Snekbooru/6.0.1 Windows Stable Release (https://www.snekbooru.org)"
+USER_AGENT = "Snekbooru/6.0.2 Windows Dev Release (https://www.snekbooru.org)"
 EHENTAI_API = "https://api.e-hentai.org/api.php"
-DEFAULT_AI_MODEL = "nousresearch/hermes-3-llama-3.1-405b:free"
+DEFAULT_AI_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
 
 BORING_TAGS = {
     "1girl", "2girls", "3girls", "4girls", "5girls", "6+girls",

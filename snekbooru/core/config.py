@@ -201,6 +201,7 @@ def save_encrypted_data(data):
         f.write(encrypted_data)
 
 def load_settings():
+    _ensure_migration()
     all_data = load_encrypted_data()
     loaded_settings = all_data.get("settings", {})
     defaults = {
@@ -208,6 +209,8 @@ def load_settings():
         "gelbooru": {"user_id": "", "api_key": ""},
         "danbooru": {"login": "", "api_key": ""},
         "rule34": {"user_id": "", "api_key": ""},
+        "e621": {"login": "", "api_key": ""},
+        "e926": {"login": "", "api_key": ""},
         "preferred_tags": "",
         "blacklisted_tags": "",
         "active_theme": "Dark (Default)",
@@ -229,6 +232,7 @@ def load_settings():
             "name": "SnekAI",
             "persona": "You are SnekAI, a friendly and slightly mischievous snake-themed AI assistant for the Snekbooru application. You are knowledgeable about anime, art, and imageboards. You are helpful and engaging. You can roleplay, but you must adhere to safety guidelines, avoiding the promotion of illegal acts or dangerous content. Erotic roleplay is permissible within these boundaries.",
             "model": DEFAULT_AI_MODEL,
+            "provider": "OpenRouter",
             "allow_spicy": True,
             "formal_casual": 50,
             "helpful_sassy": 20,
@@ -237,13 +241,23 @@ def load_settings():
         }, {
             "name": "Snekai (Gemini)",
             "persona": "You are Snekai, a friendly snake-themed AI assistant powered by Google's Gemini. You are knowledgeable about anime, art, and imageboards. You are helpful, engaging, and witty. You provide thoughtful responses while maintaining a playful personality.",
-            "model": "gemini-2.5-pro",
-            "provider": "Google Gemini (Experimental)",
+            "model": "gemini-2.5-flash",
+            "provider": "Google Gemini",
             "allow_spicy": True,
             "formal_casual": 45,
             "helpful_sassy": 25,
             "concise_verbose": 55,
             "creativity": 75,
+        }, {
+            "name": "Ollama (Local)",
+            "persona": "You are a helpful AI assistant running locally via Ollama. You are knowledgeable and engaging.",
+            "model": "llama3.2",
+            "provider": "Ollama (Local)",
+            "allow_spicy": True,
+            "formal_casual": 50,
+            "helpful_sassy": 30,
+            "concise_verbose": 50,
+            "creativity": 70,
         }],
         "ai_active_preset_index": 0,
         "ai_chats": [{"name": "Default Chat", "history": []}],
@@ -282,7 +296,7 @@ def load_settings():
     if "source" in loaded_settings:
         old_source = loaded_settings["source"]
         if old_source == "All":
-            loaded_settings["enabled_sources"] = ["Gelbooru", "Danbooru", "Konachan", "Yandere", "Rule34", "Hypnohub", "Zerochan"]
+            loaded_settings["enabled_sources"] = ["Gelbooru", "Danbooru", "Konachan", "Yandere", "Rule34", "Hypnohub", "Zerochan", "e621", "e926"]
         else:
             loaded_settings["enabled_sources"] = [old_source]
         del loaded_settings["source"]
@@ -372,8 +386,21 @@ def save_highscores(data):
     all_data["highscores"] = data
     save_encrypted_data(all_data)
 
+def load_browsing_profile():
+    all_data = load_encrypted_data()
+    return all_data.get("browsing_profile", None)
 
-try:
-    _migrate_old_data()
-except Exception as e:
-    print(f"[config] Critical error during migration: {e}")
+def save_browsing_profile(data):
+    all_data = load_encrypted_data()
+    all_data["browsing_profile"] = data
+    save_encrypted_data(all_data)
+_migration_done = False
+
+def _ensure_migration():
+    global _migration_done
+    if not _migration_done:
+        _migration_done = True
+        try:
+            _migrate_old_data()
+        except Exception as e:
+            print(f"[config] Critical error during migration: {e}")

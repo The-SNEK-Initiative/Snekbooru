@@ -4,7 +4,15 @@ import sys
 
 from PyQt5.QtCore import QStandardPaths
 
+from snekbooru.common.constants import USER_AGENT
 from snekbooru.core.config import SETTINGS
+
+
+def get_media_headers(url):
+    headers = {"User-Agent": USER_AGENT}
+    if isinstance(url, str) and "gelbooru.com" in url:
+        headers["Referer"] = "https://gelbooru.com/"
+    return headers
 
 
 def get_resource_path(relative_path):

@@ -1,6 +1,7 @@
 import json
 import asyncio
 import random
+import threading
 
 import requests
 from PyQt5.QtCore import QObject, QRunnable, pyqtSignal, pyqtSlot, QThread
@@ -60,25 +61,31 @@ class AIStreamWorker(QRunnable):
         self.messages = messages
         self.temperature = temperature
         self.signals = AIWorkerSignals()
+        self._stop_flag = threading.Event()
+
+    def stop(self):
+        self._stop_flag.set()
 
     @pyqtSlot()
     def run(self):
         try:
             active_preset_index = SETTINGS.get("ai_active_preset_index", 0)
             presets = SETTINGS.get("ai_presets", [])
-            
+
             if 0 <= active_preset_index < len(presets):
                 preset = presets[active_preset_index]
                 ai_provider = preset.get("provider", SETTINGS.get("ai_provider", "OpenRouter"))
             else:
                 ai_provider = SETTINGS.get("ai_provider", "OpenRouter")
-            
-            if ai_provider == "Google Gemini (Experimental)":
+
+            if ai_provider == "Google Gemini":
                 self._run_gemini()
+            elif ai_provider == "Ollama (Local)":
+                self._run_ollama()
             else:
                 self._run_openrouter()
-                
-        except Exception as e: 
+
+        except Exception as e:
             self.signals.error.emit(str(e))
 
     def _run_openrouter(self):
@@ -88,17 +95,22 @@ class AIStreamWorker(QRunnable):
             "HTTP-Referer": "https://github.com/atroubledsnake/Snekbooru",
             "X-Title": "Snekbooru"
         }
-        
+
         active_preset_index = SETTINGS.get("ai_active_preset_index", 0)
         active_preset = SETTINGS["ai_presets"][active_preset_index]
         model = active_preset.get("model", DEFAULT_AI_MODEL)
 
         payload = {"model": model, "messages": self.messages, "temperature": self.temperature, "stream": True}
-        response = requests.post(SETTINGS.get('ai_endpoint', 'https://openrouter.ai/api/v1/chat/completions'), headers=headers, json=payload, timeout=120, stream=True)
+        response = requests.post(
+            SETTINGS.get('ai_endpoint', 'https://openrouter.ai/api/v1/chat/completions'),
+            headers=headers, json=payload, timeout=180, stream=True
+        )
         response.raise_for_status()
-        
+
         full_response = ""
         for chunk in response.iter_lines():
+            if self._stop_flag.is_set():
+                break
             if chunk:
                 line = chunk.decode('utf-8')
                 if line.startswith('data: '):
@@ -108,8 +120,55 @@ class AIStreamWorker(QRunnable):
                         data = json.loads(content)
                         delta = data.get('choices', [{}])[0].get('delta', {})
                         if 'content' in delta and delta['content'] is not None:
-                            content_chunk = delta['content']; full_response += content_chunk; self.signals.chunk.emit(content_chunk)
-                    except (json.JSONDecodeError, KeyError, IndexError): continue
+                            content_chunk = delta['content']
+                            full_response += content_chunk
+                            self.signals.chunk.emit(content_chunk)
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
+        self.signals.finished.emit(full_response)
+
+    def _run_ollama(self):
+        active_preset_index = SETTINGS.get("ai_active_preset_index", 0)
+        active_preset = SETTINGS["ai_presets"][active_preset_index]
+        model = active_preset.get("model", "llama3.2")
+
+        headers = {"Content-Type": "application/json"}
+        ollama_url = SETTINGS.get("ollama_endpoint", "http://localhost:11434")
+
+        payload = {
+            "model": model,
+            "messages": self.messages,
+            "temperature": self.temperature,
+            "stream": True,
+        }
+
+        response = requests.post(
+            f"{ollama_url}/v1/chat/completions",
+            headers=headers, json=payload, timeout=300, stream=True
+        )
+        response.raise_for_status()
+
+        full_response = ""
+        for chunk in response.iter_lines():
+            if self._stop_flag.is_set():
+                break
+            if chunk:
+                line = chunk.decode('utf-8')
+                if line.startswith('data: '):
+                    content = line[6:]
+                    if content.strip() == '[DONE]':
+                        break
+                    try:
+                        data = json.loads(content)
+                        choices = data.get('choices', [])
+                        if choices:
+                            delta = choices[0].get('delta', {})
+                            if 'content' in delta and delta['content'] is not None:
+                                content_chunk = delta['content']
+                                full_response += content_chunk
+                                self.signals.chunk.emit(content_chunk)
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
         self.signals.finished.emit(full_response)
 
     def _run_gemini(self):
@@ -120,42 +179,46 @@ class AIStreamWorker(QRunnable):
                 "Google Generative AI library not installed. "
                 "Install it with: pip install google-generativeai"
             )
-        
+
         api_key = SETTINGS.get("gemini_api_key", "")
         if not api_key:
             raise ValueError("Gemini API key not configured. Please add it in Settings > APIs.")
-        
+
         genai.configure(api_key=api_key)
-        
+
         active_preset_index = SETTINGS.get("ai_active_preset_index", 0)
         active_preset = SETTINGS["ai_presets"][active_preset_index]
-        model_name = active_preset.get("model", "gemini-2.5-pro")
-        
+        model_name = active_preset.get("model", "gemini-2.5-flash")
+
         system_prompt = active_preset.get("persona", "")
-        
+
         gemini_model = genai.GenerativeModel(
             model_name,
             system_instruction=system_prompt
         )
-        
+
         gemini_messages = []
         for msg in self.messages:
+            if msg["role"] == "system":
+                continue
             role = "user" if msg["role"] == "user" else "model"
             gemini_messages.append({
                 "role": role,
                 "parts": [{"text": msg["content"]}]
             })
-        
+
         full_response = ""
-        
+
         response = gemini_model.generate_content(
             gemini_messages,
             generation_config=genai.types.GenerationConfig(temperature=self.temperature),
             stream=True
         )
-        
+
         try:
             for chunk in response:
+                if self._stop_flag.is_set():
+                    break
                 if chunk and hasattr(chunk, 'text') and chunk.text:
                     full_response += chunk.text
                     self.signals.chunk.emit(chunk.text)
@@ -164,7 +227,7 @@ class AIStreamWorker(QRunnable):
                 self.signals.finished.emit(full_response)
             else:
                 raise ValueError("Gemini API returned an empty response. Try again or check your API key.")
-        
+
         self.signals.finished.emit(full_response)
 
 class ImageWorkerSignals(QObject):
@@ -184,15 +247,26 @@ class ImageWorker(QRunnable):
             except RuntimeError:
                 return
 
-        try:
-            from snekbooru.common.helpers import load_pixmap_from_data
-            r = requests.get(self.url, headers={"User-Agent": USER_AGENT}, timeout=30)
-            r.raise_for_status()
-            pix = load_pixmap_from_data(r.content)
-            _safe_emit(pix)
-        except Exception as e:
-            print(f"ImageWorker failed for {self.url}: {e}")
-            _safe_emit(QPixmap())
+        from snekbooru.common.helpers import get_media_headers, load_pixmap_from_data
+        attempts = 0
+        while attempts < 2:
+            attempts += 1
+            try:
+                r = requests.get(self.url, headers=get_media_headers(self.url), timeout=30)
+                r.raise_for_status()
+                pix = load_pixmap_from_data(r.content)
+                _safe_emit(pix)
+                return
+            except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectTimeout) as e:
+                if attempts >= 2:
+                    print(f"ImageWorker failed for {self.url} after retry: {e}")
+                    _safe_emit(QPixmap())
+                else:
+                    print(f"ImageWorker read timed out for {self.url}, retrying...")
+            except Exception as e:
+                print(f"ImageWorker failed for {self.url}: {e}")
+                _safe_emit(QPixmap())
+                return
 
 class DataFetcher(QThread):
     finished = pyqtSignal(bytes, dict, str)
@@ -204,7 +278,8 @@ class DataFetcher(QThread):
 
     def run(self):
         try:
-            r = requests.get(self.url, headers={"User-Agent": USER_AGENT}, timeout=30)
+            from snekbooru.common.helpers import get_media_headers
+            r = requests.get(self.url, headers=get_media_headers(self.url), timeout=30)
             r.raise_for_status()
             self.finished.emit(r.content, self.post, "")
         except Exception as e:
