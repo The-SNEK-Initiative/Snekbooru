@@ -1,4 +1,3 @@
-"""HHaven models."""
 import typing
 from datetime import datetime
 
@@ -6,10 +5,6 @@ try:
     import pydantic
 except Exception:
     class _FallbackBaseModel:
-        """
-        Minimal BaseModel fallback for environments where pydantic is unavailable.
-        Keeps hhaven models usable without validation features.
-        """
         def __init__(self, **data: typing.Any):
             for cls in reversed(self.__class__.__mro__):
                 annotations = getattr(cls, "__annotations__", {})

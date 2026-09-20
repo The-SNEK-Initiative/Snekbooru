@@ -125,6 +125,11 @@ def resolve_manga_url(manga_obj, *, src=None, source_meta=None):
                 return f"https://e-hentai.org/g/{s.strip('/')}/"
             return f"https://e-hentai.org/g/{match.group(1)}/"
 
+    if "nhentai" in name:
+        match = re.search(r"(\d{1,10})", s)
+        if match:
+            return f"https://nhentai.net/g/{match.group(1)}/"
+
     if base:
         return base.rstrip("/") + "/" + s.lstrip("/")
 

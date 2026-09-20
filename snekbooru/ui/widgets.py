@@ -221,3 +221,76 @@ class ThumbnailWidget(QWidget):
             self.setStyleSheet("border: 2px solid #ffc107; background: #1a1a1a;" if dark else "border: 2px solid #ffc107; background: #f0f0f0;")
         else:
             self.setStyleSheet("border: 1px solid #555; background: #1a1a1a;" if dark else "border: 1px solid #ddd; background: #f0f0f0;")
+
+class HentaiThumbnailWidget(QWidget):
+    clicked = pyqtSignal(object, QWidget)
+    doubleClicked = pyqtSignal(object)
+
+    IMAGE_W = 170
+    IMAGE_H = 222
+
+    def __init__(self, post, parent=None):
+        super().__init__(parent)
+        self.post = post
+        self.setFixedSize(self.IMAGE_W, self.IMAGE_H + 54)
+        self.setCursor(Qt.PointingHandCursor)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+
+        self.image_label = QLabel("Loading…")
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setFixedSize(self.IMAGE_W, self.IMAGE_H)
+        self.image_label.setStyleSheet("background: #1a1a1a; color: #777; border: 1px solid #333; border-radius: 6px;")
+        layout.addWidget(self.image_label)
+
+        title = post.get("hentai_title") or post.get("title") or "Untitled"
+        self.title_label = QLabel(title)
+        self.title_label.setWordWrap(True)
+        self.title_label.setFixedHeight(36)
+        self.title_label.setMinimumHeight(36)
+        self.title_label.setTextInteractionFlags(Qt.NoTextInteraction)
+        self.title_label.setStyleSheet("font-size: 11px; font-weight: 600; color: #eee; border: none; background: transparent;")
+        layout.addWidget(self.title_label)
+
+        self.meta_label = QLabel(self._meta_text())
+        self.meta_label.setFixedHeight(14)
+        self.meta_label.setStyleSheet("font-size: 10px; color: #999; border: none; background: transparent;")
+        layout.addWidget(self.meta_label)
+
+    def _meta_text(self):
+        parts = []
+        date = self.post.get("hhaven_date")
+        if date:
+            parts.append(date[:10])
+        views = self.post.get("hentai_views") or 0
+        if views:
+            if views >= 1_000_000:
+                parts.append(f"{views / 1_000_000:.1f}M views")
+            elif views >= 1_000:
+                parts.append(f"{views / 1_000:.1f}K views")
+            else:
+                parts.append(f"{views} views")
+        return " · ".join(parts)
+
+    def set_pixmap(self, pixmap):
+        if not pixmap or pixmap.isNull():
+            self.image_label.setText("Failed")
+            return
+        self.image_label.setPixmap(pixmap.scaled(self.IMAGE_W, self.IMAGE_H,
+                                                Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    def set_text(self, text):
+        self.image_label.setText(text)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self.post, self)
+        else:
+            super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.doubleClicked.emit(self.post)
+        event.accept()

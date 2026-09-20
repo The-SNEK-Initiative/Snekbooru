@@ -10,7 +10,13 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLa
 from snekbooru.api.booru import danbooru_random, danbooru_post_count
 from snekbooru.common.constants import BORING_TAGS
 from snekbooru.common.translations import _tr
+from snekbooru.core.config import SETTINGS
+from snekbooru.core.downloader import download_media
 from snekbooru.core.workers import ApiWorker, ImageWorker
+
+
+def _rating_query():
+    return "" if SETTINGS.get("allow_explicit", False) else "rating:safe"
 
 
 class BaseMinigame(QWidget):
@@ -90,11 +96,11 @@ class PostShowdownGame(BaseMinigame):
         self.left_widget["image"].setText(_tr("Loading..."))
         self.right_widget["image"].setText(_tr("Loading..."))
 
-        worker1 = ApiWorker(danbooru_random, "")
+        worker1 = ApiWorker(danbooru_random, _rating_query())
         worker1.signals.finished.connect(self.on_post1_loaded)
         self.threadpool.start(worker1)
 
-        worker2 = ApiWorker(danbooru_random, "")
+        worker2 = ApiWorker(danbooru_random, _rating_query())
         worker2.signals.finished.connect(self.on_post2_loaded)
         self.threadpool.start(worker2)
 
@@ -175,12 +181,19 @@ class PuzzlePieceItem(QGraphicsObject):
         self.on_swap_callback = on_swap_callback
         self.is_selected = False
         self.animation = None  
+        self._press_scene = None
+        self._last_scene = None
+        self._drag_start_pos = None
+        self._dragging = False
+        self._drag_hover = None
+        self._is_drag_hover = False
         self.setAcceptHoverEvents(True)
 
     @pyqtProperty(QPointF)
     def pos(self):
         return super().pos()
 
+    @pos.setter
     def pos(self, value):
         super().setPos(value)
 
@@ -189,12 +202,88 @@ class PuzzlePieceItem(QGraphicsObject):
 
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget: QWidget):
         painter.drawPixmap(0, 0, self._pixmap)
-        
-        if self.is_selected:
+
+        if self._is_drag_hover or (self._dragging and self._press_scene is not None):
+            painter.setPen(QPen(QColor(255, 140, 0), 2))
+            painter.drawRect(0, 0, self.piece_size, self.piece_size)
+        elif self.is_selected:
             painter.setPen(QPen(QColor(255, 255, 0), 3))
             painter.drawRect(0, 0, self.piece_size, self.piece_size)
 
     def mousePressEvent(self, event):
+        self._press_scene = event.scenePos()
+        self._last_scene = event.scenePos()
+        self._drag_start_pos = self.pos
+        self._dragging = False
+        self.setZValue(100)
+        self._clear_selection()
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        if self._press_scene is not None:
+            if (event.scenePos() - self._press_scene).manhattanLength() > 6:
+                if not self._dragging:
+                    self._dragging = True
+                delta = event.scenePos() - self._last_scene
+                self.setPos(self.pos + delta)
+                self._update_drag_hover()
+            self._last_scene = event.scenePos()
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if self._dragging:
+            self._handle_drag_release()
+        else:
+            self._handle_click_swap()
+        self._clear_drag_hover()
+        self.setZValue(0)
+        self._press_scene = None
+        self._last_scene = None
+        self._drag_start_pos = None
+        self._dragging = False
+        self.update()
+        event.accept()
+
+    def _update_drag_hover(self):
+        col = int(round(self.pos.x() / self.piece_size))
+        row = int(round(self.pos.y() / self.piece_size))
+        col = max(0, min(self.grid_size - 1, col))
+        row = max(0, min(self.grid_size - 1, row))
+        target = QPointF(col * self.piece_size, row * self.piece_size)
+
+        occupant = None
+        for piece in (self.pieces_list or []):
+            if piece is self:
+                continue
+            if piece.pos == target:
+                occupant = piece
+                break
+
+        if self._drag_hover is not occupant:
+            if self._drag_hover is not None:
+                self._drag_hover._is_drag_hover = False
+                self._drag_hover.setZValue(0)
+                self._drag_hover.update()
+            self._drag_hover = occupant
+            if occupant is not None:
+                occupant._is_drag_hover = True
+                occupant.setZValue(50)
+                occupant.update()
+
+    def _clear_drag_hover(self):
+        if self._drag_hover is not None:
+            self._drag_hover._is_drag_hover = False
+            self._drag_hover.setZValue(0)
+            self._drag_hover.update()
+            self._drag_hover = None
+
+    def _clear_selection(self):
+        self.is_selected = False
+        if PuzzlePieceItem.selected_piece is self:
+            PuzzlePieceItem.selected_piece = None
+        self.update()
+
+    def _handle_click_swap(self):
         if PuzzlePieceItem.selected_piece is None:
             self.is_selected = True
             PuzzlePieceItem.selected_piece = self
@@ -205,40 +294,66 @@ class PuzzlePieceItem(QGraphicsObject):
             self.update()
         else:
             other = PuzzlePieceItem.selected_piece
-            
             other.is_selected = False
             other.update()
-            
             self._animate_swap(other)
-            
             PuzzlePieceItem.selected_piece = None
-        
-        super().mousePressEvent(event)
+
+    def _handle_drag_release(self):
+        col = int(round(self.pos.x() / self.piece_size))
+        row = int(round(self.pos.y() / self.piece_size))
+        col = max(0, min(self.grid_size - 1, col))
+        row = max(0, min(self.grid_size - 1, row))
+        target = QPointF(col * self.piece_size, row * self.piece_size)
+
+        occupant = None
+        for piece in (self.pieces_list or []):
+            if piece is self:
+                continue
+            if piece.pos == target:
+                occupant = piece
+                break
+
+        if occupant is not None:
+            self._animate_swap(occupant)
+        else:
+            anim = QPropertyAnimation(self, b"pos")
+            anim.setDuration(200)
+            anim.setEndValue(self._drag_start_pos)
+            self.animation = anim
+            anim.start()
 
     def _animate_swap(self, other_piece):
-        pos1 = self.pos
+        pos1 = self._drag_start_pos if self._drag_start_pos is not None else self.pos
         pos2 = other_piece.pos
-        
+
+        if pos1 == pos2:
+            return
+
         group = QParallelAnimationGroup()
-        
+
         anim1 = QPropertyAnimation(self, b"pos")
         anim1.setDuration(300)
         anim1.setEndValue(pos2)
         group.addAnimation(anim1)
-        
+
         anim2 = QPropertyAnimation(other_piece, b"pos")
         anim2.setDuration(300)
         anim2.setEndValue(pos1)
         group.addAnimation(anim2)
-        
+
         self.animation = group
         other_piece.animation = group
+
+        def _on_swap_finished():
+            self.setZValue(0)
+            other_piece.setZValue(0)
+            self.dropped.emit()
+            if self.on_swap_callback:
+                self.on_swap_callback()
+
+        group.finished.connect(_on_swap_finished)
         group.start()
-        
-        self.dropped.emit()
-        
-        if self.on_swap_callback:
-            self.on_swap_callback()
 
 
 class ImageScrambleGame(BaseMinigame):
@@ -279,7 +394,7 @@ class ImageScrambleGame(BaseMinigame):
         self.start_button.setEnabled(False)
         self.grid_size = self.grid_spinbox.value()
 
-        worker = ApiWorker(danbooru_random, "rating:safe")
+        worker = ApiWorker(danbooru_random, _rating_query())
         worker.signals.finished.connect(self.on_post_loaded)
         self.threadpool.start(worker)
 
@@ -290,6 +405,7 @@ class ImageScrambleGame(BaseMinigame):
             return
 
         self.post = post
+        self._solved = False
         worker = ImageWorker(post["file_url"], post)
         worker.signals.finished.connect(self.on_image_loaded)
         self.threadpool.start(worker)
@@ -331,8 +447,7 @@ class ImageScrambleGame(BaseMinigame):
             for x in range(self.grid_size):
                 piece_pixmap = cropped_pixmap.copy(x * self.piece_size, y * self.piece_size, self.piece_size, self.piece_size)
                 item = PuzzlePieceItem(piece_pixmap, self.grid_size, self.piece_size, self.pieces, self.check_solution)
-                item.setData(0, (x, y))  
-                item.dropped.connect(self.check_solution)
+                item.setData(0, (x, y))
                 self.pieces.append(item)
                 piece_positions.append(QPoint(x * self.piece_size, y * self.piece_size))
 
@@ -351,13 +466,15 @@ class ImageScrambleGame(BaseMinigame):
         correct_pieces = 0
         for item in self.pieces:
             original_x, original_y = item.data(0)
-            current_x = int(round(item.pos.x() / self.piece_size))
-            current_y = int(round(item.pos.y() / self.piece_size))
+            p = item.pos
+            current_x = int(round(p.x() / self.piece_size))
+            current_y = int(round(p.y() / self.piece_size))
 
             if original_x == current_x and original_y == current_y:
                 correct_pieces += 1
 
-        if correct_pieces == len(self.pieces):
+        if correct_pieces == len(self.pieces) and not getattr(self, "_solved", False):
+            self._solved = True
             self.on_puzzle_solved()
         else:
             self.status_label.setText(_tr("{correct}/{total} pieces in correct position.").format(
@@ -366,9 +483,25 @@ class ImageScrambleGame(BaseMinigame):
 
     def on_puzzle_solved(self):
         self.status_label.setText(_tr("Congratulations! You solved the puzzle!"))
-        QMessageBox.information(self, _tr("Puzzle Solved!"), _tr("You successfully reassembled the image!"))
+        box = QMessageBox(self)
+        box.setWindowTitle(_tr("Puzzle Solved!"))
+        box.setText(_tr("You successfully reassembled the image!"))
+        download_btn = box.addButton(_tr("Download Image"), QMessageBox.AcceptRole)
+        box.addButton(_tr("Close"), QMessageBox.RejectRole)
+        box.exec_()
+        if box.clickedButton() is download_btn and self.post:
+            self._download_puzzle_image()
         for item in self.pieces:
             item.setFlag(QGraphicsItem.ItemIsMovable, False)
+
+    def _download_puzzle_image(self):
+        def do_download():
+            return download_media(self.post, self)
+        worker = ApiWorker(do_download)
+        worker.signals.finished.connect(lambda res, err: self.status_label.setText(
+            _tr("Downloaded!") if not err and res and res[0] else (_tr("Download failed: {e}").format(e=err or (res[1] if res else "")))
+        ))
+        self.threadpool.start(worker)
 
 
 class TagGuesserGame(BaseMinigame):
@@ -405,7 +538,7 @@ class TagGuesserGame(BaseMinigame):
         self.image_label.setText(_tr("Loading..."))
         self._clear_tag_buttons()
 
-        worker = ApiWorker(danbooru_random, "rating:safe")
+        worker = ApiWorker(danbooru_random, _rating_query())
         worker.signals.finished.connect(self.on_post_loaded)
         self.threadpool.start(worker)
 

@@ -6,7 +6,9 @@
 ### This README is still maintained, however it is recommended
 that you go to https://snekbooru.org/ for more information regarding this project. (Usually a few hours/days behind on updates however)
 
-# We are extremely sorry for the time it is taking to release complete versions, so we will add a workflow to build unstable releases, with dev per versions tag, these will not be packaged by any installer however, and will be most likely riddled with bugs, as the tag suggests, for developers and testers.
+# We are extremely sorry for the time it is taking to release complete versions, so have added a workflow to build unstable releases, with dev per versions tag, these will not be packaged by any installer however, and will be most likely riddled with bugs, as the tag suggests, for developers and testers.
+
+Please note that these version may be unstable, and are not packaged by a installer, so use them at your own risk.
 
 # Snekbooru
 ### Finally common sourced!
@@ -50,7 +52,7 @@ that you go to https://snekbooru.org/ for more information regarding this projec
 - **Modern Image Formats**: Native support for AVIF and WebP images, ensuring compatibility with all modern imageboards and some a bit less modern.
 - **FullScreen Viewer**: An immersive, multiprocess media viewer with zoom and video controls that won't freeze the app.
 - **Manga Reader**: A dedicated tab for searching and reading manga from various online sources, complete with an integrated ad blocker.
-- **Automatic Video Support**: Plays most video formats automatically (requires VLC Media Player).
+- **Automatic Video Support**: Plays most video formats automatically (no longer requires VLC Media Player).
 
 ### Search & Organization
 - **Tag Based Searching**: Powerful tag search with auto completion to find exactly what you're looking for.

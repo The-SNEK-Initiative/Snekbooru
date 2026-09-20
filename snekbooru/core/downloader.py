@@ -1,29 +1,10 @@
 import os
 import requests
 
-from snekbooru.common.constants import USER_AGENT
-from snekbooru.common.helpers import convert_gif_to_webp, get_file_hash
+from snekbooru.common.helpers import convert_gif_to_webp, get_file_hash, get_media_headers
 from snekbooru.common.translations import _tr
 from snekbooru.core.config import (SETTINGS, load_downloads_data,
                                    save_downloads_data)
-
-
-def _try_create_thumbnail(media_data, download_dir, file_hash):
-    try:
-        from PIL import Image
-        import io
-    except ImportError:
-        return None
-    try:
-        with Image.open(io.BytesIO(media_data)) as img:
-            if img.mode in ("RGBA", "P", "LA"):
-                img = img.convert("RGB")
-            img.thumbnail((256, 256))
-            thumb_path = os.path.join(download_dir, f"{file_hash}_thumb.jpg")
-            img.save(thumb_path, format="JPEG", quality=85, optimize=True)
-            return thumb_path
-    except Exception:
-        return None
 
 
 def download_media(post, parent_widget=None):
@@ -44,7 +25,7 @@ def download_media(post, parent_widget=None):
         if file_hash in downloads_data and os.path.exists(downloads_data[file_hash].get("local_path", "")):
             return True, _tr("File already exists.")
 
-        r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=60)
+        r = requests.get(url, headers=get_media_headers(url), timeout=60)
         r.raise_for_status()
         
         media_data = r.content
@@ -56,13 +37,9 @@ def download_media(post, parent_widget=None):
 
         with open(file_path, "wb") as f: f.write(media_data)
 
-        local_thumb = None
-        if final_ext.lstrip('.').lower() in ["jpg", "jpeg", "png", "webp", "bmp", "gif"]:
-            local_thumb = _try_create_thumbnail(media_data, download_dir, file_hash)
-
         post_copy = post.copy()
         post_copy['local_path'] = file_path
-        post_copy['local_thumbnail_path'] = local_thumb
+        post_copy['local_thumbnail_path'] = None
         post_copy['file_ext'] = final_ext.lstrip('.')
         downloads_data[file_hash] = post_copy
         save_downloads_data(downloads_data)

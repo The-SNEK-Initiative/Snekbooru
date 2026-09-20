@@ -31,7 +31,6 @@ from snekbooru.ui.styling import (EXAMPLE_STYLESHEET, get_fonts_path,
                                   SCSS_KEYWORDS, SCSS_PROPERTIES, SCSS_PSEUDO)
 from snekbooru.ui.widgets import AdBlocker
 from snekbooru.core.workers import ApiWorker
-from snekbooru.core.workers import AsyncApiWorker
 from snekbooru.ui.apollo_player import ApolloVideoPlayer
 from snekbooru.core.book_export import (export_epub_from_images,
                                         cleanup_images_folder,
@@ -715,9 +714,6 @@ class ThemeEditorDialog(BaseDialog):
         self.content_layout.addLayout(button_row)
 
     def save_and_accept(self):
-        """
-        Saves your creative work and applies the new look.
-        """
         try:
             with open(self.theme_path, 'w', encoding='utf-8') as f: f.write(self.editor.toPlainText())
             self.accept()
@@ -726,77 +722,172 @@ class ThemeEditorDialog(BaseDialog):
 
 
 class HentaiSeriesDialog(BaseDialog):
-    """
-    A detailed view for adult animated series, showing information 
-    about the plot and a list of all available episodes.
-    """
-    def __init__(self, series_data: dict, parent=None):
-        super().__init__(series_data.get("title", "Hentai Series"), parent)
-        self.series_data = series_data
+    def __init__(self, post: dict, parent=None):
+        title = post.get("hentai_title") or post.get("title") or "Hentai Series"
+        super().__init__(title, parent)
+        self.post = post
         self.parent_app = parent
-        self.setMinimumSize(800, 600)
+        self.setMinimumSize(820, 620)
 
-        description_group = QGroupBox(_tr("Description"))
-        description_layout = QVBoxLayout(description_group)
-        description_browser = QTextBrowser()
-        description_browser.setPlainText(series_data.get("description", "No description available."))
-        description_browser.setReadOnly(True)
-        description_browser.setMaximumHeight(150)
-        description_layout.addWidget(description_browser)
-        self.content_layout.addWidget(description_group)
+        header_layout = QHBoxLayout()
+        self.cover_label = QLabel(_tr("Loading..."))
+        self.cover_label.setAlignment(Qt.AlignCenter)
+        self.cover_label.setFixedSize(180, 240)
+        self.cover_label.setStyleSheet("background: #1a1a1a; color: #777; border: 1px solid #333; border-radius: 6px;")
+        header_layout.addWidget(self.cover_label)
+
+        info_layout = QVBoxLayout()
+        self.title_label = QLabel(f"<b>{title}</b>")
+        self.title_label.setWordWrap(True)
+        self.title_label.setTextFormat(Qt.RichText)
+        info_layout.addWidget(self.title_label)
+        self.meta_label = QLabel("")
+        self.meta_label.setStyleSheet("color: #999; font-size: 11px;")
+        info_layout.addWidget(self.meta_label)
+        self.description_browser = QTextBrowser()
+        self.description_browser.setReadOnly(True)
+        self.description_browser.setMaximumHeight(130)
+        self.description_browser.setPlainText(_tr("Loading description..."))
+        info_layout.addWidget(self.description_browser)
+        self.open_browser_btn = QPushButton(qta.icon('fa5s.external-link-alt'), _tr(" Open in Browser"))
+        self.open_browser_btn.clicked.connect(self.open_in_browser)
+        info_layout.addWidget(self.open_browser_btn)
+        info_layout.addStretch()
+        header_layout.addLayout(info_layout, 1)
+        self.content_layout.addLayout(header_layout)
 
         episodes_group = QGroupBox(_tr("Episodes"))
         episodes_layout = QVBoxLayout(episodes_group)
         self.episode_list = QListWidget()
         self.episode_list.itemDoubleClicked.connect(self.on_episode_selected)
+        self.episode_list.currentItemChanged.connect(lambda cur, prev: self.on_episode_selected(cur) if cur else None)
         episodes_layout.addWidget(self.episode_list)
         self.content_layout.addWidget(episodes_group)
 
-        self.populate_episodes()
+        self.threadpool = parent.threadpool if parent and hasattr(parent, "threadpool") else QThreadPool()
+        self._load_async()
 
-    def populate_episodes(self):
-        """
-        Fills the list with all the episodes found for this series.
-        """
-        episodes = self.series_data.get("episodes", [])
+    def _load_async(self):
+        slug = (self.post.get("hentai_slug") or "").strip()
+        cover = self.post.get("preview_url") or ""
+        if cover:
+            try:
+                from snekbooru.core.workers import ImageWorker
+                worker = ImageWorker(cover, {"_dummy": True})
+                worker.signals.finished.connect(self.on_cover_loaded)
+                self.threadpool.start(worker)
+            except Exception:
+                pass
+        if not slug:
+            self.description_browser.setPlainText(_tr("No series slug available."))
+            self.episode_list.addItem(_tr("No episodes found."))
+            return
+        from snekbooru.ui.main_window import _do_hhaven_fetch
+        detail_worker = ApiWorker(_do_hhaven_fetch, "detail", 0, 0, "", 0, slug)
+        detail_worker.signals.finished.connect(self.on_detail_loaded)
+        episodes_worker = ApiWorker(_do_hhaven_fetch, "episodes", 0, 0, "", 0, slug)
+        episodes_worker.signals.finished.connect(self.on_episodes_loaded)
+        self.threadpool.start(detail_worker)
+        self.threadpool.start(episodes_worker)
+
+    def on_cover_loaded(self, pixmap, _post):
+        if pixmap and not pixmap.isNull():
+            self.cover_label.setPixmap(pixmap.scaled(178, 238, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        else:
+            self.cover_label.setText(_tr("No cover"))
+
+    def on_detail_loaded(self, result, err):
+        if not isinstance(result, dict) or not result:
+            self.description_browser.setPlainText(_tr("No description available."))
+            return
+        content = result.get("content") or {}
+        if isinstance(content, dict):
+            content = content.get("rendered") or content.get("raw") or ""
+        rendered = (content or "").strip()
+        if rendered:
+            self.description_browser.setHtml(rendered)
+        else:
+            self.description_browser.setPlainText(_tr("No description available."))
+
+        parts = []
+        date = (result.get("date") or "").strip()
+        if date:
+            parts.append(date[:10])
+        genre_names = self._genre_names_from(result, result.get("wp-manga-genre") or [])
+        if genre_names:
+            parts.append(", ".join(genre_names))
+        views = int(self.post.get("hentai_views") or result.get("views") or 0)
+        if views:
+            if views >= 1_000_000:
+                parts.append(f"{views / 1_000_000:.1f}M views")
+            elif views >= 1_000:
+                parts.append(f"{views / 1_000:.1f}K views")
+            else:
+                parts.append(f"{views} views")
+        if parts:
+            self.meta_label.setText(" · ".join(parts))
+
+    def _genre_names_from(self, item, genre_ids):
+        try:
+            from snekbooru.ui.main_window import _HH_GENRE_NAMES
+            names = []
+            for gid in genre_ids or []:
+                name = _HH_GENRE_NAMES.get(int(gid)) or ""
+                if name and name not in names:
+                    names.append(name)
+            return names
+        except Exception:
+            return []
+
+    def on_episodes_loaded(self, results, err):
+        self.episode_list.clear()
+        episodes = results or []
         if not episodes:
             self.episode_list.addItem(_tr("No episodes found."))
             return
-
-        for episode in episodes:
-            item = QListWidgetItem(episode.get("title", "Unknown Episode"))
-            item.setData(Qt.UserRole, episode)
+        for ep in episodes:
+            name = (ep.get("chapter_name")
+                    or ep.get("episode_title")
+                    or ep.get("chapter_slug")
+                    or _tr("Episode")).strip()
+            stream_url = (ep.get("chapter_content")
+                          or ep.get("indexable_content_url")
+                          or ep.get("content_url")
+                          or "").strip()
+            dur = int(ep.get("duration_seconds") or 0)
+            label = name
+            if dur > 0:
+                mm, ss = divmod(dur, 60)
+                label += f"   ·   {mm}:{ss:02d}"
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, {"name": name, "stream_url": stream_url,
+                                       "url": ep.get("url") or ep.get("chapter_url") or ""})
             self.episode_list.addItem(item)
 
     def on_episode_selected(self, item: QListWidgetItem):
-        """
-        Handles what happens when you pick an episode to watch.
-        """
-        episode_data = item.data(Qt.UserRole)
-        episode_obj = episode_data.get("episode_obj")
-        episode_title = episode_data.get("title")
-
-        if not episode_obj:
-            QMessageBox.warning(self, "Error", "This episode has no data object.")
+        data = item.data(Qt.UserRole)
+        if not isinstance(data, dict):
             return
+        stream_url = data.get("stream_url")
+        if not stream_url:
+            QMessageBox.warning(self, _tr("Error"), _tr("No stream URL available for this episode."))
+            return
+        title = self.post.get("hentai_title") or "Hentai"
+        dialog = HentaiViewerDialog(stream_url, f"{title} - {data.get('name', 'Episode')}", self)
+        parent_app = self.parent_app
+        if parent_app and hasattr(parent_app, "open_dialogs"):
+            parent_app.open_dialogs.append(dialog)
+        dialog.show()
 
-        from snekbooru.ui.main_window import _get_hhaven_stream_url 
-        worker = AsyncApiWorker(_get_hhaven_stream_url, episode_obj)
-        def on_finished(stream_url, err):
-            if err:
-                QMessageBox.critical(self, "Error", f"Could not load video stream:\n{err}")
-            else:
-            
-                dialog = HentaiViewerDialog(stream_url, episode_title, self); self.parent_app.open_dialogs.append(dialog); dialog.show()
-        worker.signals.finished.connect(on_finished)
-        self.parent_app.threadpool.start(worker)
+    def open_in_browser(self):
+        url = self.post.get("source_post_url")
+        if url:
+            webbrowser.open(url)
+        else:
+            QMessageBox.information(self, _tr("HentaiHaven"),
+                                    _tr("https://hentaihaven.xxx/"))
 
 class HentaiViewerDialog(BaseDialog):
-    """
-    A cinematic video viewer specifically tuned for streaming animated 
-    content. It supports high-quality playback, full-screen mode, 
-    and smooth seek controls.
-    """
     def __init__(self, stream_url, title, parent=None):
         super().__init__(f"Hentai Viewer - {title}", parent)
         self.setMinimumSize(1280, 720)
@@ -829,7 +920,7 @@ class HentaiViewerDialog(BaseDialog):
         
         self.media_stack.addWidget(self.loading_widget)
 
-        self.apollo_video_player = ApolloVideoPlayer()
+        self.apollo_video_player = ApolloVideoPlayer(enable_smears=True)
         self.media_stack.addWidget(self.apollo_video_player)
 
         self.video_controls = QWidget()
@@ -1056,6 +1147,81 @@ class HentaiViewerDialog(BaseDialog):
             pass
         if hasattr(self, 'threadpool'): self.threadpool.clear()
         super().closeEvent(event)
+
+class HentaiVideoPreviewDialog(BaseDialog):
+    def __init__(self, post: dict, parent=None):
+        name = post.get("hanime_data", {}).get("name", "Hanime Video")
+        super().__init__(name, parent)
+        self.post = post
+        self.setMinimumSize(600, 500)
+        self.resize(650, 550)
+        cl = self.content_layout
+
+        data = post.get("hanime_data", {})
+        source_url = post.get("source_post_url", "")
+        desc = data.get("description", "")
+        tags = data.get("tags", [])
+        views = data.get("views", 0)
+        likes = data.get("likes", 0)
+        cover = data.get("cover_url", "")
+
+        top = QHBoxLayout()
+        if cover:
+            thumb = QLabel()
+            thumb.setFixedSize(200, 120)
+            thumb.setAlignment(Qt.AlignCenter)
+            thumb.setText(_tr("Loading..."))
+            thumb.setStyleSheet("background: #222; border-radius: 6px;")
+            top.addWidget(thumb)
+            from snekbooru.core.workers import ImageWorker
+            worker = ImageWorker(cover, {"_dummy": True})
+            worker.signals.finished.connect(lambda px, _: thumb.setPixmap(px) if px and not px.isNull() else thumb.setText(""))
+            app = parent.parent_app if hasattr(parent, 'parent_app') else parent
+            if hasattr(app, 'threadpool'):
+                app.threadpool.start(worker)
+
+        info = QVBoxLayout()
+        title_label = QLabel(f"<b>{name}</b>")
+        title_label.setWordWrap(True)
+        title_label.setTextFormat(Qt.RichText)
+        info.addWidget(title_label)
+
+        if views:
+            info.addWidget(QLabel(f"Views: {views:,}"))
+        if likes:
+            info.addWidget(QLabel(f"Likes: {likes}"))
+        info.addStretch()
+        top.addLayout(info)
+        cl.addLayout(top)
+
+        if desc:
+            desc_group = QGroupBox(_tr("Description"))
+            dg = QVBoxLayout(desc_group)
+            desc_text = QTextBrowser()
+            desc_text.setPlainText(desc)
+            desc_text.setMaximumHeight(120)
+            dg.addWidget(desc_text)
+            cl.addWidget(desc_group)
+
+        if tags:
+            tag_group = QGroupBox(_tr("Tags"))
+            tg = QVBoxLayout(tag_group)
+            tag_text = QLabel(", ".join(tags))
+            tag_text.setWordWrap(True)
+            tg.addWidget(tag_text)
+            cl.addWidget(tag_group)
+
+        cl.addStretch()
+
+        btn_layout = QHBoxLayout()
+        if source_url:
+            watch_btn = QPushButton(qta.icon('fa5s.external-link-alt'), _tr(" Watch in Browser"))
+            watch_btn.clicked.connect(lambda: webbrowser.open(source_url))
+            btn_layout.addWidget(watch_btn)
+        close_btn = QPushButton(_tr("Close"))
+        close_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(close_btn)
+        cl.addLayout(btn_layout)
 
 class BooruEditorDialog(BaseDialog):
     def __init__(self, booru_config=None, parent=None):
@@ -1415,15 +1581,16 @@ class SettingsDialog(BaseDialog):
         sources_group.setLayout(sources_group_layout)
         self.source_checkboxes = {}
         all_sources = [
-            "Gelbooru", "Danbooru", "Konachan", "Yandere", "Rule34", "Hypnohub", "Zerochan", "Waifu.pics"
+            "Gelbooru", "Danbooru", "Konachan", "Yandere", "Rule34", "Hypnohub", "Zerochan", "e621", "e926", "XBooru", "Safebooru", "Szurubooru", "Mikubooru"
         ]
         custom_booru_names = [b['name'] for b in self.parent_app.custom_boorus]
         all_sources.extend(custom_booru_names)
 
         enabled_sources = SETTINGS.get("enabled_sources", ["Gelbooru"])
+        enabled_sources_lower = [s.lower() for s in enabled_sources]
         for source_name in all_sources:
             checkbox = QCheckBox(source_name)
-            checkbox.setChecked(source_name in enabled_sources)
+            checkbox.setChecked(source_name in enabled_sources or source_name.lower() in enabled_sources_lower)
             sources_group_layout.addWidget(checkbox)
             self.source_checkboxes[source_name] = checkbox
         sources_group_layout.addStretch()
@@ -1480,6 +1647,19 @@ class SettingsDialog(BaseDialog):
         self.tabs.addTab(tab, qta.icon('fa5s.keyboard'), _tr("Hotkeys"))
 
     def _create_api_tab(self):
+        api_tab = QWidget()
+        tab_layout = QVBoxLayout(api_tab)
+        tab_layout.setContentsMargins(0, 0, 0, 0)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll_content = QWidget()
+        api_layout = QVBoxLayout(scroll_content)
+        api_layout.setAlignment(Qt.AlignTop)
+        scroll.setWidget(scroll_content)
+        tab_layout.addWidget(scroll)
+
         gel_group = QGroupBox(_tr("Gelbooru API"))
         gel_form = QFormLayout()
         gel_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
@@ -1488,10 +1668,6 @@ class SettingsDialog(BaseDialog):
         gel_form.addRow(_tr("Gelbooru User ID:"), self.gel_user)
         gel_form.addRow(_tr("Gelbooru API Key:"), self.gel_key)
         gel_group.setLayout(gel_form)
-
-        api_tab = QWidget()
-        api_layout = QVBoxLayout(api_tab)
-        api_layout.setAlignment(Qt.AlignTop)
         api_layout.addWidget(gel_group)
 
         dan_group = QGroupBox(_tr("Danbooru API"))
@@ -1513,6 +1689,26 @@ class SettingsDialog(BaseDialog):
         r34_form.addRow(_tr("Rule34 API Key:"), self.r34_key)
         r34_group.setLayout(r34_form)
         api_layout.addWidget(r34_group)
+
+        e621_group = QGroupBox(_tr("e621 API"))
+        e621_form = QFormLayout()
+        e621_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        self.e621_login = QLineEdit(SETTINGS.get("e621", {}).get("login", ""))
+        self.e621_key  = QLineEdit(SETTINGS.get("e621", {}).get("api_key", "")); self.e621_key.setEchoMode(QLineEdit.Password)
+        e621_form.addRow(_tr("e621 Login:"), self.e621_login)
+        e621_form.addRow(_tr("e621 API Key:"), self.e621_key)
+        e621_group.setLayout(e621_form)
+        api_layout.addWidget(e621_group)
+
+        e926_group = QGroupBox(_tr("e926 API"))
+        e926_form = QFormLayout()
+        e926_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        self.e926_login = QLineEdit(SETTINGS.get("e926", {}).get("login", ""))
+        self.e926_key  = QLineEdit(SETTINGS.get("e926", {}).get("api_key", "")); self.e926_key.setEchoMode(QLineEdit.Password)
+        e926_form.addRow(_tr("e926 Login:"), self.e926_login)
+        e926_form.addRow(_tr("e926 API Key:"), self.e926_key)
+        e926_group.setLayout(e926_form)
+        api_layout.addWidget(e926_group)
 
         ai_api_group = QGroupBox(_tr("AI API"))
         ai_api_form = QFormLayout()
@@ -1614,6 +1810,10 @@ class SettingsDialog(BaseDialog):
         self.video_playback_method_combo.setToolTip(_tr("How videos in the media viewer are handled.\n'Download First' is more stable and has better seeking.\n'Stream' loads faster but may have issues with some video formats or seeking."))
         self.video_playback_method_combo.setCurrentText(SETTINGS.get("video_playback_method", _tr("Download First (Reliable)")))
         form.addRow(_tr("Video Playback:"), self.video_playback_method_combo)
+
+        # Video upscaling and smear-frame generation are auto-configured by the
+        # Apollo player (best quality profile, smears on held anime frames when
+        # available). No user settings are needed.
 
         # self.potato_mode_check = QCheckBox(_tr("Enable low-resource 'Potato Mode'"))
         # self.potato_mode_check.setChecked(SETTINGS.get("potato_mode", False))
@@ -2057,6 +2257,8 @@ You can combine type, ID, and class selectors for very specific targeting: `sGro
             "gelbooru": {"user_id": self.gel_user.text().strip(), "api_key": self.gel_key.text().strip()},
             "danbooru": {"login": self.db_login.text().strip(), "api_key": self.db_key.text().strip()},
             "rule34": {"user_id": self.r34_user.text().strip(), "api_key": self.r34_key.text().strip()},
+            "e621": {"login": self.e621_login.text().strip(), "api_key": self.e621_key.text().strip()},
+            "e926": {"login": self.e926_login.text().strip(), "api_key": self.e926_key.text().strip()},
             "preferred_tags": self.pref_tags.toPlainText().strip(),
             "blacklisted_tags": self.black_tags.toPlainText().strip(),
             "active_theme": self.theme_selector.currentText(),
@@ -2081,6 +2283,7 @@ You can combine type, ID, and class selectors for very specific targeting: `sGro
             "custom_window_height": self.custom_height_spin.value(),
             "auto_scale_grid": self.auto_scale_grid_check.isChecked(),
             "video_playback_method": self.video_playback_method_combo.currentText(),
+            # Video upscaling / smear settings are auto-configured by the Apollo player.
             # "potato_mode": self.potato_mode_check.isChecked(),
             # "cpu_limit": self.cpu_limit_spin.value(),
             # "ram_limit": self.ram_limit_spin.value(),
@@ -2117,12 +2320,18 @@ class FirstRunDialog(BaseDialog):
         self.gel_user = QLineEdit(); self.gel_key = QLineEdit(); self.gel_key.setEchoMode(QLineEdit.Password)
         self.db_login = QLineEdit(); self.db_key = QLineEdit(); self.db_key.setEchoMode(QLineEdit.Password)
         self.r34_user = QLineEdit(); self.r34_key = QLineEdit(); self.r34_key.setEchoMode(QLineEdit.Password)
+        self.e621_login = QLineEdit(); self.e621_key = QLineEdit(); self.e621_key.setEchoMode(QLineEdit.Password)
+        self.e926_login = QLineEdit(); self.e926_key = QLineEdit(); self.e926_key.setEchoMode(QLineEdit.Password)
         api_form.addRow(_tr("Gelbooru User ID:"), self.gel_user)
         api_form.addRow(_tr("Gelbooru API Key:"), self.gel_key)
         api_form.addRow(_tr("Danbooru Login:"), self.db_login)
         api_form.addRow(_tr("Danbooru API Key:"), self.db_key)
         api_form.addRow(_tr("Rule34 User ID:"), self.r34_user)
         api_form.addRow(_tr("Rule34 API Key:"), self.r34_key)
+        api_form.addRow(_tr("e621 Login:"), self.e621_login)
+        api_form.addRow(_tr("e621 API Key:"), self.e621_key)
+        api_form.addRow(_tr("e926 Login:"), self.e926_login)
+        api_form.addRow(_tr("e926 API Key:"), self.e926_key)
         api_group.setLayout(api_form)
         self.content_layout.addWidget(api_group)
 
@@ -2145,6 +2354,8 @@ class FirstRunDialog(BaseDialog):
             "gelbooru": {"user_id": self.gel_user.text().strip(), "api_key": self.gel_key.text().strip()},
             "danbooru": {"login": self.db_login.text().strip(), "api_key": self.db_key.text().strip()},
             "rule34": {"user_id": self.r34_user.text().strip(), "api_key": self.r34_key.text().strip()},
+            "e621": {"login": self.e621_login.text().strip(), "api_key": self.e621_key.text().strip()},
+            "e926": {"login": self.e926_login.text().strip(), "api_key": self.e926_key.text().strip()},
         }
 
 class BulkDownloadDialog(BaseDialog):

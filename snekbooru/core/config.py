@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import os
+import struct
 import uuid
 
 from cryptography.fernet import Fernet
@@ -139,28 +140,32 @@ def _migrate_old_data():
                         old_file_path = os.path.join(old_data_dir, filename)
                         if os.path.isfile(old_file_path):
                             new_file_path = os.path.join(new_data_dir, filename)
-                            
+
+                            if filename.endswith("_thumb.jpg"):
+                                try:
+                                    os.remove(old_file_path)
+                                    print(f"[config] Discarded obsolete thumbnail {old_file_path}")
+                                except Exception:
+                                    pass
+                                continue
+
                             if not os.path.exists(new_file_path):
-                                if filename.endswith("_thumb.jpg"):
-                                    file_hash = filename[:-10]  
-                                else:
-                                    file_hash = os.path.splitext(filename)[0]
-                                
+                                file_hash = os.path.splitext(filename)[0]
+
                                 shutil.move(old_file_path, new_file_path)
                                 files_migrated += 1
-                                
-                                if not filename.endswith("_thumb.jpg"):
-                                    if file_hash in downloads_data:
-                                        downloads_data[file_hash]["local_path"] = new_file_path
-                                        if "id" not in downloads_data[file_hash]:
-                                            downloads_data[file_hash]["id"] = file_hash
-                                    else:
-                                        _, ext = os.path.splitext(filename)
-                                        downloads_data[file_hash] = {
-                                            "id": file_hash,
-                                            "local_path": new_file_path,
-                                            "file_ext": ext.lstrip('.')
-                                        }
+
+                                if file_hash in downloads_data:
+                                    downloads_data[file_hash]["local_path"] = new_file_path
+                                    if "id" not in downloads_data[file_hash]:
+                                        downloads_data[file_hash]["id"] = file_hash
+                                else:
+                                    _, ext = os.path.splitext(filename)
+                                    downloads_data[file_hash] = {
+                                        "id": file_hash,
+                                        "local_path": new_file_path,
+                                        "file_ext": ext.lstrip('.')
+                                    }
                     
                     if files_migrated > 0:
                         try:
@@ -182,25 +187,278 @@ def _migrate_old_data():
         pass
 
 
-def load_encrypted_data():
+_SECTION_DIRS = {
+    "settings": "settings",
+    "favorites": "favorites",
+    "downloads_data": "downloads",
+    "search_history": "history",
+    "tag_profile": "profile",
+    "custom_boorus": "boorus",
+    "highscores": "highscores",
+    "browsing_profile": "browsing",
+}
+
+_CREDENTIAL_FIELDS = {
+    "gelbooru": ("api_key",),
+    "danbooru": ("api_key",),
+    "rule34": ("api_key",),
+    "e621": ("api_key",),
+    "e926": ("api_key",),
+    "gelbooru_v2": ("api_key",),
+}
+
+_AI_CREDENTIAL_FIELDS = ("ai_api_key", "gemini_api_key", "ai_endpoint_secret")
+
+_CREDMAN_SOURCE = "Snekbooru"
+_CREDMAN_TARGET_PREFIX = "SnekbooruCred/"
+
+def _credman_write(target, value):
+    if not value:
+        return False
     try:
-        with open(_STORAGE_PATH, "rb") as f:
-            encrypted_data = f.read()
-        if not encrypted_data: return {}
-        fernet = Fernet(_ENCRYPTION_KEY)
-        decrypted_data = fernet.decrypt(encrypted_data)
-        return json.loads(decrypted_data.decode('utf-8'))
+        import win32cred
+        win32cred.CredWrite({
+            "Type": 1,
+            "TargetName": f"{_CREDMAN_TARGET_PREFIX}{target}",
+            "UserName": _CREDMAN_SOURCE,
+            "CredentialBlob": str(value).encode("utf-8"),
+            "Persist": 2,
+            "Description": "Snekbooru API credential",
+        }, 0)
+        return True
     except Exception:
-        return {}
+        return False
+
+def _credman_read(target):
+    try:
+        import win32cred
+        cred = win32cred.CredRead(f"{_CREDMAN_TARGET_PREFIX}{target}", 1, 0)
+        blob = cred.get("CredentialBlob", b"")
+        if isinstance(blob, bytes):
+            return blob.decode("utf-8", "ignore")
+        return str(blob) if blob else None
+    except Exception:
+        return None
+
+def _credman_delete(target):
+    try:
+        import win32cred
+        win32cred.CredDelete(f"{_CREDMAN_TARGET_PREFIX}{target}", 1, 0)
+    except Exception:
+        pass
+
+def _strip_credentials(value):
+    if isinstance(value, dict):
+        stripped = {}
+        for k, v in value.items():
+            if isinstance(v, dict):
+                sub = dict(v)
+                for field in _CREDENTIAL_FIELDS.get(k, ()):
+                    _credman_write(f"{k}/{field}", sub.get(field, ""))
+                    sub[field] = ""
+                stripped[k] = sub
+            elif k in _AI_CREDENTIAL_FIELDS:
+                _credman_write(k, v)
+                stripped[k] = ""
+            else:
+                stripped[k] = v
+        return stripped
+    return value
+
+def _reinject_credentials(value):
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if isinstance(v, dict):
+                for field in _CREDENTIAL_FIELDS.get(k, ()):
+                    cred = _credman_read(f"{k}/{field}")
+                    if cred is not None:
+                        v[field] = cred
+            elif k in _AI_CREDENTIAL_FIELDS:
+                cred = _credman_read(k)
+                if cred is not None:
+                    value[k] = cred
+        return value
+    return value
+
+def _dpapi_protect(raw):
+    import win32crypt
+    blob, _ = win32crypt.CryptProtectData(
+        raw, "Snekbooru state", None, None, None, 0)
+    return blob
+
+def _dpapi_unprotect(blob):
+    import win32crypt
+    data, _ = win32crypt.CryptUnprotectData(blob, None, None, None, 0)
+    return data
+
+def _aesgcm_key():
+    return hashlib.sha256(_get_hardware_id().encode('utf-8', 'ignore')).digest()
+
+def _aesgcm_protect(raw):
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+    import secrets
+    nonce = secrets.token_bytes(12)
+    ct = AESGCM(_aesgcm_key()).encrypt(nonce, raw, b"snekbooru")
+    return nonce + ct
+
+def _aesgcm_unprotect(blob):
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    nonce, ct = blob[:12], blob[12:]
+    return AESGCM(_aesgcm_key()).decrypt(nonce, ct, b"snekbooru")
+
+def _encrypt_bytes(raw):
+    if os.name == 'nt':
+        try:
+            return _dpapi_protect(raw)
+        except Exception:
+            pass
+    return _aesgcm_protect(raw)
+
+def _decrypt_bytes(blob):
+    if os.name == 'nt':
+        try:
+            return _dpapi_unprotect(blob)
+        except Exception:
+            pass
+    return _aesgcm_unprotect(blob)
+
+def _section_path(section):
+    subdir = _SECTION_DIRS.get(section)
+    base = get_app_data_dir() if False else None
+    root = get_app_data_dir()
+    if subdir:
+        root = os.path.join(root, subdir)
+    os.makedirs(root, exist_ok=True)
+    return os.path.join(root, "state")
+
+def _read_section(section):
+    path = _section_path(section)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "rb") as f:
+            blob = f.read()
+        if not blob:
+            return {}
+        return json.loads(_decrypt_bytes(blob).decode('utf-8'))
+    except Exception:
+        return None
+
+def _write_section(section, value):
+    path = _section_path(section)
+    raw = json.dumps(value, default=str).encode('utf-8')
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(_encrypt_bytes(raw))
+    os.replace(tmp, path)
+
+def _legacy_monolith():
+    return _get_storage_path()
+
+def _legacy_backup_path():
+    return _legacy_monolith() + ".legacy"
+
+def _read_legacy_file(path):
+    try:
+        with open(path, "rb") as f:
+            blob = f.read()
+    except Exception:
+        return None
+    if not blob:
+        return None
+    try:
+        return json.loads(Fernet(_ENCRYPTION_KEY).decrypt(blob).decode('utf-8'))
+    except Exception:
+        return None
+
+def _purge_legacy_backup():
+    global _LEGACY_CACHE, _LEGACY_LOADED
+    path = _legacy_backup_path()
+    if not os.path.exists(path):
+        return
+    legacy = _read_legacy_file(path)
+    if not isinstance(legacy, dict):
+        return
+    for section, value in legacy.items():
+        if section not in _SECTION_DIRS:
+            continue
+        if value is None:
+            continue
+        if _read_section(section) is None:
+            return
+    try:
+        os.remove(path)
+        print(f"[config] Purged fully transferred legacy backup: {path}")
+    except Exception:
+        return
+    _LEGACY_CACHE = None
+    _LEGACY_LOADED = False
+
+_LEGACY_CACHE = None
+_LEGACY_LOADED = False
+
+def _load_legacy():
+    global _LEGACY_CACHE, _LEGACY_LOADED
+    if _LEGACY_LOADED:
+        return _LEGACY_CACHE
+    _LEGACY_LOADED = True
+    path = _legacy_monolith()
+    if not os.path.exists(path):
+        path = _legacy_backup_path()
+    if not os.path.exists(path):
+        _LEGACY_CACHE = None
+        return None
+    _LEGACY_CACHE = _read_legacy_file(path)
+    return _LEGACY_CACHE
+
+def load_encrypted_data():
+    _purge_legacy_backup()
+    merged = {}
+    missing = []
+    for section in _SECTION_DIRS:
+        value = _read_section(section)
+        if value is not None:
+            merged[section] = value
+        else:
+            missing.append(section)
+    if missing:
+        legacy = _load_legacy()
+        if isinstance(legacy, dict):
+            for section in missing:
+                if section in legacy:
+                    merged[section] = legacy[section]
+    return merged
 
 def save_encrypted_data(data):
-    fernet = Fernet(_ENCRYPTION_KEY)
-    json_data = json.dumps(data, indent=2, default=str).encode('utf-8')
-    encrypted_data = fernet.encrypt(json_data)
-    with open(_STORAGE_PATH, "wb") as f:
-        f.write(encrypted_data)
+    _purge_legacy_backup()
+    legacy = _load_legacy()
+    for section in _SECTION_DIRS:
+        if section in data and data[section] is not None:
+            _write_section(section, data[section])
+    _maybe_retire_legacy(legacy)
+
+def _maybe_retire_legacy(legacy):
+    if not isinstance(legacy, dict):
+        return
+    path = _legacy_monolith()
+    if not os.path.exists(path):
+        return
+    _LEGACY_CACHE = legacy
+    for section, value in legacy.items():
+        if section not in _SECTION_DIRS:
+            continue
+        if value is None:
+            continue
+        if _read_section(section) is None:
+            return
+    try:
+        os.replace(path, path + ".legacy")
+    except Exception:
+        pass
 
 def load_settings():
+    _ensure_migration()
     all_data = load_encrypted_data()
     loaded_settings = all_data.get("settings", {})
     defaults = {
@@ -208,6 +466,8 @@ def load_settings():
         "gelbooru": {"user_id": "", "api_key": ""},
         "danbooru": {"login": "", "api_key": ""},
         "rule34": {"user_id": "", "api_key": ""},
+        "e621": {"login": "", "api_key": ""},
+        "e926": {"login": "", "api_key": ""},
         "preferred_tags": "",
         "blacklisted_tags": "",
         "active_theme": "Dark (Default)",
@@ -229,6 +489,7 @@ def load_settings():
             "name": "SnekAI",
             "persona": "You are SnekAI, a friendly and slightly mischievous snake-themed AI assistant for the Snekbooru application. You are knowledgeable about anime, art, and imageboards. You are helpful and engaging. You can roleplay, but you must adhere to safety guidelines, avoiding the promotion of illegal acts or dangerous content. Erotic roleplay is permissible within these boundaries.",
             "model": DEFAULT_AI_MODEL,
+            "provider": "OpenRouter",
             "allow_spicy": True,
             "formal_casual": 50,
             "helpful_sassy": 20,
@@ -237,13 +498,23 @@ def load_settings():
         }, {
             "name": "Snekai (Gemini)",
             "persona": "You are Snekai, a friendly snake-themed AI assistant powered by Google's Gemini. You are knowledgeable about anime, art, and imageboards. You are helpful, engaging, and witty. You provide thoughtful responses while maintaining a playful personality.",
-            "model": "gemini-2.5-pro",
-            "provider": "Google Gemini (Experimental)",
+            "model": "gemini-2.5-flash",
+            "provider": "Google Gemini",
             "allow_spicy": True,
             "formal_casual": 45,
             "helpful_sassy": 25,
             "concise_verbose": 55,
             "creativity": 75,
+        }, {
+            "name": "Ollama (Local)",
+            "persona": "You are a helpful AI assistant running locally via Ollama. You are knowledgeable and engaging.",
+            "model": "llama3.2",
+            "provider": "Ollama (Local)",
+            "allow_spicy": True,
+            "formal_casual": 50,
+            "helpful_sassy": 30,
+            "concise_verbose": 50,
+            "creativity": 70,
         }],
         "ai_active_preset_index": 0,
         "ai_chats": [{"name": "Default Chat", "history": []}],
@@ -282,7 +553,7 @@ def load_settings():
     if "source" in loaded_settings:
         old_source = loaded_settings["source"]
         if old_source == "All":
-            loaded_settings["enabled_sources"] = ["Gelbooru", "Danbooru", "Konachan", "Yandere", "Rule34", "Hypnohub", "Zerochan"]
+            loaded_settings["enabled_sources"] = ["Gelbooru", "Danbooru", "Konachan", "Yandere", "Rule34", "Hypnohub", "Zerochan", "e621", "e926"]
         else:
             loaded_settings["enabled_sources"] = [old_source]
         del loaded_settings["source"]
@@ -372,8 +643,21 @@ def save_highscores(data):
     all_data["highscores"] = data
     save_encrypted_data(all_data)
 
+def load_browsing_profile():
+    all_data = load_encrypted_data()
+    return all_data.get("browsing_profile", None)
 
-try:
-    _migrate_old_data()
-except Exception as e:
-    print(f"[config] Critical error during migration: {e}")
+def save_browsing_profile(data):
+    all_data = load_encrypted_data()
+    all_data["browsing_profile"] = data
+    save_encrypted_data(all_data)
+_migration_done = False
+
+def _ensure_migration():
+    global _migration_done
+    if not _migration_done:
+        _migration_done = True
+        try:
+            _migrate_old_data()
+        except Exception as e:
+            print(f"[config] Critical error during migration: {e}")
