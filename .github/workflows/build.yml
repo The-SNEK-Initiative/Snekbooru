@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       base_version:
-        description: "Base version for the dev tag (e.g. v6.0.3 -> v6.0.3-dev.1)"
+        description: "Base version for the dev tag (e.g. v6.0.3 -> v6.0.3-dev.1 yadda yadda)"
         required: false
         default: "v6.0.3"
 
@@ -27,18 +27,33 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check dev USER_AGENT
+        id: ua_check
+        shell: bash
+        run: |
+          UA=$(grep -m1 '^USER_AGENT' snekbooru/common/constants.py)
+          if echo "$UA" | grep -qE 'Snekbooru/[^ ]+ [^ ]+ Dev Release \(https://www\.snekbooru\.org\)'; then
+            echo "USER_AGENT is a Dev Release; continuing with unstable build."
+            echo "is_dev=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "USER_AGENT is not a Dev Release; skipping unstable build."
+            echo "is_dev=no" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.14"
 
       - name: Install dependencies
+        if: steps.ua_check.outputs.is_dev == 'yes'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
 
       - name: Compute next dev version
+        if: steps.ua_check.outputs.is_dev == 'yes'
         id: version
         shell: bash
         run: |
@@ -52,9 +67,11 @@ jobs:
           echo "next=${NEXT}" >> "$GITHUB_OUTPUT"
 
       - name: Build with PyInstaller
+        if: steps.ua_check.outputs.is_dev == 'yes'
         run: pyinstaller Snekbooru.spec --noconfirm
 
       - name: Upload build artifact
+        if: steps.ua_check.outputs.is_dev == 'yes'
         uses: actions/upload-artifact@v4
         with:
           name: Snekbooru-${{ steps.version.outputs.version }}
@@ -62,6 +79,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish unstable tag + prerelease
+        if: steps.ua_check.outputs.is_dev == 'yes'
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
