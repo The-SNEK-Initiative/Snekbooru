@@ -81,7 +81,8 @@ from snekbooru.api.booru import (gelbooru_posts, danbooru_post_count, danbooru_r
                                  suggest_all_tags)
 from snekbooru.api.utils import scrape_post_count
 from snekbooru.common.constants import USER_AGENT
-from snekbooru.common.helpers import get_file_hash, get_media_headers, get_resource_path
+from snekbooru.common.helpers import (generate_thumbnail_pixmap, get_file_hash,
+                                      get_media_headers, get_resource_path)
 from snekbooru.common.translations import _tr
 from snekbooru.core.config import (SETTINGS, find_post_in_favorites,
                                    load_custom_boorus, load_downloads_data,
@@ -101,7 +102,7 @@ from snekbooru.core.book_export import (cleanup_images_folder, export_epub_from_
                                         export_png_zip_from_images, list_image_files)
 from snekbooru.core.temp_cache import cleanup_snekbooru_temp, snekbooru_temp_dir
 from snekbooru.core.workers import (AIStreamWorker, ApiWorker, AsyncApiWorker, ImageWorker,
-                                    RecommendationFetcher)
+                                    LocalThumbWorker, RecommendationFetcher)
 from snekbooru.ui.dialogs import (BaseDialog, BulkDownloadDialog,
                                   BookExportDialog, HentaiSeriesDialog,
                                   HentaiVideoPreviewDialog, HentaiViewerDialog, MangaBookDialog, MangaDownloadExportDialog, SettingsDialog)
@@ -862,13 +863,19 @@ class MediaViewerDialog(BaseDialog):
         self.duration_label.setText("00:00 / 00:00")
 
         if info["is_local"]:
+            self._current_video_is_stream = False
+            self._stream_fallback_url = None
             self._load_video_file(info["url"])
         else:
             video_playback_method = SETTINGS.get("video_playback_method", _tr("Download First (Reliable)"))
             if video_playback_method == _tr("Stream (Experimental)"):
+                self._current_video_is_stream = True
+                self._stream_fallback_url = info["url"]
                 self.media_stack.setCurrentWidget(self.apollo_video_player)
                 self._load_video_stream(info["url"])
             else:
+                self._current_video_is_stream = False
+                self._stream_fallback_url = None
                 self.image_label.setText(_tr("Loading video..."))
                 self.media_stack.setCurrentWidget(self.image_scroll_area)
                 worker = ApiWorker(self._download_video_to_temp, info["url"], self.post.get('id', 'temp'))
@@ -1038,10 +1045,24 @@ class MediaViewerDialog(BaseDialog):
     def on_apollo_error(self, error_msg):
         if not self.video_mode_active:
             return
+        if getattr(self, '_current_video_is_stream', False) and getattr(self, '_stream_fallback_url', None) \
+                and not self.apollo_video_player.is_playing:
+            self._current_video_is_stream = False
+            url = self._stream_fallback_url
+            self._stream_fallback_url = None
+            self._load_video_fallback(url, error_msg)
+            return
         self.image_label.setText(_tr("Video Error: {error}").format(error=error_msg))
         self.media_stack.setCurrentWidget(self.image_scroll_area)
         self.video_controls.setVisible(False)
         self.download_progress_bar.hide()
+
+    def _load_video_fallback(self, url, error_msg):
+        self.image_label.setText(_tr("Stream failed, downloading instead: {error}").format(error=error_msg))
+        self.media_stack.setCurrentWidget(self.image_scroll_area)
+        worker = ApiWorker(self._download_video_to_temp, url, self.post.get('id', 'temp'))
+        worker.signals.finished.connect(self._on_video_downloaded)
+        self.threadpool.start(worker)
     
     def update_download_progress(self, progress):
         if progress > 0 and progress < 100:
@@ -2006,6 +2027,37 @@ class GelDanApp(QWidget):
             self.showNormal()
         else:
             self.showMaximized()
+
+    def nativeEvent(self, eventType, message):
+        if sys.platform != 'win32':
+            return super().nativeEvent(eventType, message)
+        try:
+            import ctypes
+            from ctypes import wintypes
+            msg = wintypes.MSG.from_address(int(message))
+            if msg.message == 0x0084:  # WM_NCHITTEST
+                if not self.isFullScreen() and not self.isMaximized():
+                    if hasattr(self, 'title_bar') and not self.title_bar.isVisible():
+                        return super().nativeEvent(eventType, message)
+                    x = ctypes.c_short(msg.lParam & 0xFFFF).value
+                    y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+                    border = 6
+                    rect = self.frameGeometry()
+                    left = x <= rect.left() + border
+                    right = x >= rect.right() - border
+                    top = y <= rect.top() + border
+                    bottom = y >= rect.bottom() - border
+                    if top and left:     return True, 13  # HTTOPLEFT
+                    if top and right:    return True, 14  # HTTOPRIGHT
+                    if bottom and left:  return True, 16  # HTBOTTOMLEFT
+                    if bottom and right: return True, 17  # HTBOTTOMRIGHT
+                    if left:             return True, 10  # HTLEFT
+                    if right:            return True, 11  # HTRIGHT
+                    if top:              return True, 12  # HTTOP
+                    if bottom:           return True, 15  # HTBOTTOM
+        except Exception:
+            pass
+        return super().nativeEvent(eventType, message)
 
     def load_app_icon(self):
         if self.is_incognito_window:
@@ -4302,8 +4354,6 @@ class GelDanApp(QWidget):
             try:
                 if os.path.exists(post.get("local_path", "")):
                     os.remove(post.get("local_path"))
-                if os.path.exists(post.get("local_thumbnail_path", "")):
-                    os.remove(post.get("local_thumbnail_path"))
             except OSError as e:
                 QMessageBox.warning(self, _tr("Delete Error"), str(e))
             self.refresh_downloads_grid()
@@ -4314,29 +4364,47 @@ class GelDanApp(QWidget):
         dir_path = QFileDialog.getExistingDirectory(self, _tr("Select Folder to Import"))
         if not dir_path: return
 
-        QMessageBox.information(self, _tr("Importing"), _tr("Importing files... The app may freeze."))
-        
-        imported_count = 0
+        worker = ApiWorker(self._collect_local_imports, dir_path)
+        worker.signals.finished.connect(self._on_local_import_finished)
+        self.threadpool.start(worker)
+
+    def _collect_local_imports(self, dir_path):
+        media_exts = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.mp4', '.webm', '.mov', '.mkv', '.avi')
+        existing = load_downloads_data()
+        posts = []
         for filename in os.listdir(dir_path):
-            if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp', '.mp4', '.webm')):
-                file_path = os.path.join(dir_path, filename)
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in media_exts:
+                continue
+            file_path = os.path.join(dir_path, filename)
             mock_post = {
-                    "id": f"local_{filename}",
-                    "file_url": f"file:///{file_path}",
-                    "source_post_url": f"file:///{file_path}",
-                    "tags": "local_import",
-                    "file_ext": filename.split('.')[-1].lower(),
-                    "local_path": file_path,
-                    "local_thumbnail_path": None 
-                }
+                "id": f"local_{filename}",
+                "file_url": f"file:///{file_path}",
+                "source_post_url": f"file:///{file_path}",
+                "tags": "local_import",
+                "file_ext": ext.lstrip('.'),
+                "local_path": file_path,
+                "local_thumbnail_path": None,
+            }
             file_hash = get_file_hash(mock_post)
+            if file_hash in existing:
+                continue
+            existing[file_hash] = mock_post
+            posts.append((file_hash, mock_post))
+        return posts
+
+    def _on_local_import_finished(self, new_posts, err):
+        if err:
+            QMessageBox.warning(self, _tr("Import Failed"), _tr("Error: {error}").format(error=err))
+            return
+        imported_count = 0
+        for file_hash, mock_post in (new_posts or []):
             if file_hash not in self.downloads_data:
                 self.downloads_data[file_hash] = mock_post
                 imported_count += 1
-        
         save_downloads_data(self.downloads_data)
-        QMessageBox.information(self, _tr("Import Complete"), _tr("Imported {count} new files.").format(count=imported_count))
         self.refresh_downloads_grid()
+        QMessageBox.information(self, _tr("Import Complete"), _tr("Imported {count} new files.").format(count=imported_count))
 
     def populate_ai_presets(self):
         self.ai_preset_combo.clear()
@@ -5890,18 +5958,18 @@ class GelDanApp(QWidget):
 
             thumb_loaded = False
             if is_local:
-                local_thumb = post.get("local_thumbnail_path")
-                if local_thumb and os.path.exists(local_thumb):
-                    pix = QPixmap(local_thumb)
-                    thumb.set_pixmap(pix)
-                    thumb_loaded = True
-                else:
-                    local_path = post.get("local_path")
-                    file_ext = post.get("file_ext", "").lower()
-                    if local_path and os.path.exists(local_path) and file_ext in ["jpg", "jpeg", "png", "webp", "bmp", "gif"]:
-                        pix = QPixmap(local_path)
-                        thumb.set_pixmap(pix)
-                        thumb_loaded = True
+                local_path = post.get("local_path")
+                file_ext = post.get("file_ext", "").lower()
+                if local_path and os.path.exists(local_path):
+                    if file_ext in ("mp4", "webm", "mov", "mkv", "avi"):
+                        worker = LocalThumbWorker(post, thumb_size, video_only=True)
+                        worker.signals.finished.connect(self.on_thumbnail_loaded)
+                        self.threadpool.start(worker)
+                    else:
+                        pix = generate_thumbnail_pixmap(local_path, thumb_size)
+                        if not pix.isNull():
+                            thumb.set_pixmap(pix)
+                            thumb_loaded = True
 
             if not thumb_loaded:
                 thumb_url = post.get("preview_url")
@@ -6029,8 +6097,6 @@ class GelDanApp(QWidget):
                     try:
                         if os.path.exists(post.get("local_path", "")):
                             os.remove(post.get("local_path"))
-                        if os.path.exists(post.get("local_thumbnail_path", "")):
-                            os.remove(post.get("local_thumbnail_path"))
                     except OSError as e:
                         QMessageBox.warning(self, _tr("Delete Error"), str(e))
                     self.refresh_downloads_grid()
@@ -6101,19 +6167,23 @@ class GelDanApp(QWidget):
             pref_tags = SETTINGS.get("preferred_tags", "").split()
             tags = " ".join(pref_tags) + " " + tags
 
+        self._last_query_tags = tags.strip()
+        self._persona_search_tags = []
         if not self.is_incognito_window and SETTINGS.get("enable_recommendations", True) and hasattr(self, 'persona') and self.persona is not None:
             try:
                 from snekbooru.common.constants import BORING_TAGS
                 from snekbooru.core.persona import top_affinity_tags
                 exclude = set(BORING_TAGS)
                 exclude.update(SETTINGS.get("blacklisted_tags", "").split())
-                persona_tags = top_affinity_tags(self.persona, limit=8, exclude=exclude)
-                existing = set(tags.split())
-                soft = [f"~{t}" for t in persona_tags if t not in existing and f"~{t}" not in tags]
-                if soft:
-                    tags = (tags + " " + " ".join(soft)).strip()
+                if not SETTINGS.get("allow_loli_shota", False):
+                    exclude.update(["loli", "shota"])
+                if not SETTINGS.get("allow_bestiality", False):
+                    exclude.add("bestiality")
+                if not SETTINGS.get("allow_guro", False):
+                    exclude.add("guro")
+                self._persona_search_tags = top_affinity_tags(self.persona, limit=8, exclude=exclude)
             except Exception as e:
-                print(f"Error blending persona into search: {e}")
+                print(f"Error computing persona tags: {e}")
 
         if not SETTINGS.get("allow_explicit", False) and "rating:" not in tags:
             tags += " rating:safe"
@@ -6125,11 +6195,153 @@ class GelDanApp(QWidget):
         self.status.setText(_tr("Loading..."))
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)
-        
+
+        limit = self.limit.value()
         enabled_sources = SETTINGS.get("enabled_sources", ["Gelbooru"])
-        worker = ApiWorker(fetch_multiple_sources, enabled_sources, tags, self.limit.value(), self.pid, self.custom_boorus)
-        worker.signals.finished.connect(self.on_posts_loaded)
+
+        persona_tags = []
+        if not getattr(self, 'is_incognito_window', False) and SETTINGS.get("enable_recommendations", True) and getattr(self, 'persona', None) is not None:
+            persona_tags = getattr(self, '_persona_search_tags', None) or []
+
+        sub_count = 0
+        if persona_tags:
+            sub_count = max(1, int(round(limit * 0.10)))
+            sub_count = min(sub_count, max(1, limit - 1))
+
+        main_count = max(1, limit - sub_count)
+
+        token = getattr(self, '_search_token', 0) + 1
+        self._search_token = token
+        if not hasattr(self, '_pending_searches'):
+            self._pending_searches = {}
+        self._pending_searches[token] = {'pid': self.pid, 'main': None, 'sub': None,
+                                         'err': None, 'expected': 2 if sub_count else 1, 'arrived': 0}
+
+        worker = ApiWorker(fetch_multiple_sources, enabled_sources, tags, main_count, self.pid, self.custom_boorus)
+        worker.signals.finished.connect(lambda data, err, t=token: self._on_search_part(data, err, t, 'main'))
         self.threadpool.start(worker)
+
+        if sub_count:
+            worker2 = ApiWorker(self._collect_persona_posts, persona_tags, sub_count, self.custom_boorus)
+            worker2.signals.finished.connect(lambda data, err, t=token: self._on_search_part(data, err, t, 'sub'))
+            self.threadpool.start(worker2)
+
+    def _collect_persona_posts(self, persona_tags, count, custom_boorus):
+        enabled_sources = SETTINGS.get("enabled_sources", ["Gelbooru"])
+        collected = []
+        seen_ids = set()
+        try:
+            for tag in persona_tags:
+                search_tag = tag
+                if not SETTINGS.get("allow_explicit", False):
+                    search_tag += " rating:safe"
+                try:
+                    posts, _ = fetch_multiple_sources(enabled_sources, search_tag, max(1, count), self.pid, custom_boorus)
+                except Exception:
+                    continue
+                for post in posts:
+                    if not isinstance(post, dict):
+                        continue
+                    post_id = post.get('id')
+                    if post_id and post_id not in seen_ids:
+                        seen_ids.add(post_id)
+                        collected.append(post)
+                if len(collected) >= count:
+                    break
+        except Exception:
+            pass
+        return collected[:count]
+
+    def _on_search_part(self, data, err, token, key):
+        pending = self._pending_searches.get(token)
+        if pending is None:
+            return
+        pending[key] = data
+        if err:
+            pending['err'] = err if pending['err'] is None else pending['err']
+        pending['arrived'] += 1
+        if pending['arrived'] >= pending['expected']:
+            self._finalize_search(token)
+
+    def _finalize_search(self, token):
+        pending = self._pending_searches.pop(token, None)
+        if pending is None:
+            return
+        if pending['pid'] != self.pid:
+            return
+
+        from snekbooru.api.booru import filter_posts_by_blacklist
+        self.progress.setVisible(False)
+
+        main_data = pending['main']
+        if pending['err'] or main_data is None:
+            self.status.setText(_tr("Error: {error}").format(error=pending['err'] or _tr("Unknown error")))
+            return
+
+        posts, total_count = main_data
+
+        blacklisted_tags = SETTINGS.get("blacklisted_tags", "").split()
+        if not SETTINGS.get("allow_loli_shota", False):
+            blacklisted_tags.extend(["loli", "shota"])
+        if not SETTINGS.get("allow_bestiality", False):
+            blacklisted_tags.append("bestiality")
+        if not SETTINGS.get("allow_guro", False):
+            blacklisted_tags.append("guro")
+
+        posts = filter_posts_by_blacklist(posts, blacklisted_tags)
+
+        subs = []
+        if pending.get('sub'):
+            sub_posts = pending['sub']
+            sub_posts = filter_posts_by_blacklist(sub_posts, blacklisted_tags)
+            existing_ids = {p.get('id') for p in posts}
+            subs = [p for p in sub_posts if isinstance(p, dict) and p.get('id') not in existing_ids]
+
+        mixed = self._interleave_search_posts(posts, subs)
+
+        self.posts = mixed
+        self.id_to_post_map = {p['id']: p for p in mixed}
+
+        self.clear_grid(self.grid)
+        self.post_to_widget_map.clear()
+        self.selected_for_bulk.clear()
+        self.update_bulk_status()
+
+        self.populate_grid(self.grid, self.posts, self.post_to_widget_map, self.on_thumbnail_clicked, viewport_width=self.scroll.viewport().width())
+
+        self.status.setText(_tr("Loaded {count} posts.").format(count=len(self.posts)))
+        self.page_input.setText(str(self.pid + 1))
+
+        if total_count > 0:
+            total_pages = (total_count + self.limit.value() - 1) // self.limit.value()
+            self.page_count_label.setText(_tr("Page {current} of {total}").format(current=self.pid + 1, total=total_pages))
+        else:
+            self.page_count_label.setText("")
+
+    def _interleave_search_posts(self, posts, subs):
+        if not subs:
+            return posts[:]
+        total = len(posts) + len(subs)
+        step = total / float(len(subs))
+        positions = set()
+        idx = step / 2.0
+        for _ in subs:
+            positions.add(min(total - 1, int(idx)))
+            idx += step
+        result = []
+        pi = 0
+        si = 0
+        for i in range(total):
+            if i in positions and si < len(subs):
+                result.append(subs[si])
+                si += 1
+            elif pi < len(posts):
+                result.append(posts[pi])
+                pi += 1
+            elif si < len(subs):
+                result.append(subs[si])
+                si += 1
+        return result
 
     def on_posts_loaded(self, data, err):
         from snekbooru.api.booru import filter_posts_by_blacklist

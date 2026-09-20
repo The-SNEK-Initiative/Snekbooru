@@ -714,9 +714,6 @@ class ThemeEditorDialog(BaseDialog):
         self.content_layout.addLayout(button_row)
 
     def save_and_accept(self):
-        """
-        Saves your creative work and applies the new look.
-        """
         try:
             with open(self.theme_path, 'w', encoding='utf-8') as f: f.write(self.editor.toPlainText())
             self.accept()
@@ -725,10 +722,6 @@ class ThemeEditorDialog(BaseDialog):
 
 
 class HentaiSeriesDialog(BaseDialog):
-    """
-    Detailed view for a HentaiHaven series: cover, description, genres,
-    and a playable list of episodes (loaded from the cms.hentaihaven.xxx API).
-    """
     def __init__(self, post: dict, parent=None):
         title = post.get("hentai_title") or post.get("title") or "Hentai Series"
         super().__init__(title, parent)
@@ -895,11 +888,6 @@ class HentaiSeriesDialog(BaseDialog):
                                     _tr("https://hentaihaven.xxx/"))
 
 class HentaiViewerDialog(BaseDialog):
-    """
-    A cinematic video viewer specifically tuned for streaming animated 
-    content. It supports high-quality playback, full-screen mode, 
-    and smooth seek controls.
-    """
     def __init__(self, stream_url, title, parent=None):
         super().__init__(f"Hentai Viewer - {title}", parent)
         self.setMinimumSize(1280, 720)
@@ -932,7 +920,7 @@ class HentaiViewerDialog(BaseDialog):
         
         self.media_stack.addWidget(self.loading_widget)
 
-        self.apollo_video_player = ApolloVideoPlayer()
+        self.apollo_video_player = ApolloVideoPlayer(enable_smears=True)
         self.media_stack.addWidget(self.apollo_video_player)
 
         self.video_controls = QWidget()
@@ -1823,6 +1811,10 @@ class SettingsDialog(BaseDialog):
         self.video_playback_method_combo.setCurrentText(SETTINGS.get("video_playback_method", _tr("Download First (Reliable)")))
         form.addRow(_tr("Video Playback:"), self.video_playback_method_combo)
 
+        # Video upscaling and smear-frame generation are auto-configured by the
+        # Apollo player (best quality profile, smears on held anime frames when
+        # available). No user settings are needed.
+
         # self.potato_mode_check = QCheckBox(_tr("Enable low-resource 'Potato Mode'"))
         # self.potato_mode_check.setChecked(SETTINGS.get("potato_mode", False))
         # self.potato_mode_check.setToolTip(_tr("Reduces animations, disables some features, and lowers thumbnail quality to save resources."))
@@ -2291,6 +2283,7 @@ You can combine type, ID, and class selectors for very specific targeting: `sGro
             "custom_window_height": self.custom_height_spin.value(),
             "auto_scale_grid": self.auto_scale_grid_check.isChecked(),
             "video_playback_method": self.video_playback_method_combo.currentText(),
+            # Video upscaling / smear settings are auto-configured by the Apollo player.
             # "potato_mode": self.potato_mode_check.isChecked(),
             # "cpu_limit": self.cpu_limit_spin.value(),
             # "ram_limit": self.ram_limit_spin.value(),

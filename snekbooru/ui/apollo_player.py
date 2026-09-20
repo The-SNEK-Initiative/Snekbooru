@@ -33,7 +33,7 @@ class ApolloVideoPlayer(QWidget):
     download_progress = pyqtSignal(float)
     DEBUG_LOGS = False
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, enable_smears=False):
         super().__init__(parent)
         self.media_url = None
         self.player = None
@@ -41,12 +41,14 @@ class ApolloVideoPlayer(QWidget):
         self.duration_ms = 0
         self.video_width = 0
         self.video_height = 0
+        self.enable_smears = enable_smears
         
         self._state = PlayerState.IDLE
         self._current_volume = 1.0 
         self._is_muted = False
         self._last_emitted_duration = -1
         self._session_active = False
+        self.is_fullscreen = False
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -170,6 +172,7 @@ class ApolloVideoPlayer(QWidget):
                 except Exception:
                     pass
 
+        self._apply_upscale_settings()
         self._change_state(PlayerState.OPENING)
         self.loading_label.setText("Opening media...")
         self.loading_label.show()
@@ -177,6 +180,53 @@ class ApolloVideoPlayer(QWidget):
         
         self.poll_timer.start(100) 
         threading.Thread(target=self._bg_open, daemon=True).start()
+
+    def _apply_upscale_settings(self):
+        if not self.player or not hasattr(self.player, 'configure_upscaler'):
+            return
+        try:
+            if not self.enable_smears:
+                # Browser / media viewer: pure native decode path, no upscaler
+                # and no lookahead. This is the fast, bit-identical mode.
+                self.player.configure_upscaler(
+                    mode="off",
+                    target_width=0,
+                    target_height=0,
+                    max_scale=1.0,
+                    quality="balanced",
+                    matrix="auto",
+                    color_range="auto",
+                )
+                if hasattr(self.player, 'set_smear'):
+                    self.player.set_smear(enabled=False, hold_frames=0, strength=0.0)
+                if self.DEBUG_LOGS:
+                    print("[ApolloPlayer] Native decode path (upscaler off, smear off)")
+                return
+
+            # Hentai viewer: smears are mandatory. The streams are VOD HLS
+            # (recorded), so lookahead is fine -- a real live (#EXT-X-ENDLIST
+            # missing) stream would not reach playback here.
+            self.player.configure_upscaler(
+                mode="spatial",
+                target_width=0,
+                target_height=1080,
+                max_scale=2.0,
+                quality="balanced",
+                matrix="auto",
+                color_range="auto",
+            )
+            if hasattr(self.player, 'set_smear'):
+                # Hold 2 = one-frame lookahead: keeps A/V lag imperceptible
+                # while still smearing every other held drawing.
+                self.player.set_smear(
+                    enabled=True,
+                    hold_frames=2,
+                    strength=0.6,
+                )
+            if self.DEBUG_LOGS:
+                print("[ApolloPlayer] Hentai pipeline: spatial upscale, smear hold=2")
+        except Exception as e:
+            print(f"[ApolloPlayer] Upscaler config error: {e}")
         
     def _bg_open(self):
         if not self.player: 
@@ -263,6 +313,19 @@ class ApolloVideoPlayer(QWidget):
                 self.player.set_mute(self._is_muted)
             except Exception:
                 pass
+
+    def toggle_fullscreen(self):
+        top_window = self.window()
+        if top_window is None:
+            return
+        if top_window.isFullScreen():
+            top_window.showNormal()
+            self.is_fullscreen = False
+            self._adjust_video_geometry()
+        else:
+            top_window.showFullScreen()
+            self.is_fullscreen = True
+            self._adjust_video_geometry()
             
     def is_muted(self):
         return self._is_muted

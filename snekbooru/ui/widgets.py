@@ -223,7 +223,6 @@ class ThumbnailWidget(QWidget):
             self.setStyleSheet("border: 1px solid #555; background: #1a1a1a;" if dark else "border: 1px solid #ddd; background: #f0f0f0;")
 
 class HentaiThumbnailWidget(QWidget):
-    """Poster-style card for hentai series: cover image, title and meta."""
     clicked = pyqtSignal(object, QWidget)
     doubleClicked = pyqtSignal(object)
 

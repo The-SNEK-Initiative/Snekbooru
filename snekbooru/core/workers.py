@@ -268,6 +268,31 @@ class ImageWorker(QRunnable):
                 _safe_emit(QPixmap())
                 return
 
+class LocalThumbWorker(QRunnable):
+    def __init__(self, post, size, video_only=False):
+        super().__init__()
+        self.post = post
+        self.size = size
+        self.video_only = video_only
+        self.signals = ImageWorkerSignals()
+
+    @pyqtSlot()
+    def run(self):
+        from snekbooru.common.helpers import generate_thumbnail_pixmap, load_video_thumbnail_pixmap
+        path = self.post.get("local_path", "")
+        pix = QPixmap()
+        try:
+            if self.video_only:
+                pix = load_video_thumbnail_pixmap(path, self.size)
+            else:
+                pix = generate_thumbnail_pixmap(path, self.size)
+        except Exception as e:
+            print(f"LocalThumbWorker failed for {path}: {e}")
+        try:
+            self.signals.finished.emit(pix, self.post)
+        except RuntimeError:
+            return
+
 class DataFetcher(QThread):
     finished = pyqtSignal(bytes, dict, str)
 

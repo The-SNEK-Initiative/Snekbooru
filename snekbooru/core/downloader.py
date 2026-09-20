@@ -7,24 +7,6 @@ from snekbooru.core.config import (SETTINGS, load_downloads_data,
                                    save_downloads_data)
 
 
-def _try_create_thumbnail(media_data, download_dir, file_hash):
-    try:
-        from PIL import Image
-        import io
-    except ImportError:
-        return None
-    try:
-        with Image.open(io.BytesIO(media_data)) as img:
-            if img.mode in ("RGBA", "P", "LA"):
-                img = img.convert("RGB")
-            img.thumbnail((256, 256))
-            thumb_path = os.path.join(download_dir, f"{file_hash}_thumb.jpg")
-            img.save(thumb_path, format="JPEG", quality=85, optimize=True)
-            return thumb_path
-    except Exception:
-        return None
-
-
 def download_media(post, parent_widget=None):
     url = post.get("file_url")
     if not url:
@@ -55,13 +37,9 @@ def download_media(post, parent_widget=None):
 
         with open(file_path, "wb") as f: f.write(media_data)
 
-        local_thumb = None
-        if final_ext.lstrip('.').lower() in ["jpg", "jpeg", "png", "webp", "bmp", "gif"]:
-            local_thumb = _try_create_thumbnail(media_data, download_dir, file_hash)
-
         post_copy = post.copy()
         post_copy['local_path'] = file_path
-        post_copy['local_thumbnail_path'] = local_thumb
+        post_copy['local_thumbnail_path'] = None
         post_copy['file_ext'] = final_ext.lstrip('.')
         downloads_data[file_hash] = post_copy
         save_downloads_data(downloads_data)

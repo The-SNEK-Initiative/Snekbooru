@@ -598,6 +598,19 @@ def hentai_haven_video_url(episode_url):
     except Exception as e:
         return None, str(e)
 
+def _dedupe_posts(posts):
+    seen_urls = set()
+    unique_posts = []
+    for post in posts:
+        file_url = post.get('file_url')
+        if file_url and file_url not in seen_urls:
+            unique_posts.append(post)
+            seen_urls.add(file_url)
+        elif not file_url:
+            unique_posts.append(post)
+    return unique_posts
+
+
 def fetch_multiple_sources(sources, tags, limit, page, custom_boorus):
     if not sources:
         return [], 0
@@ -605,26 +618,45 @@ def fetch_multiple_sources(sources, tags, limit, page, custom_boorus):
     limit_per_source = max(1, limit // len(sources))
     all_posts = []
     total_count = 0 
+    working_sources = []
 
     for source_name in sources:
         try:
             posts, _ = _do_fetch_single_source(source_name, tags, limit_per_source, page, custom_boorus)
+            if posts:
+                working_sources.append(source_name)
             all_posts.extend(posts)
         except Exception as e:
             print(f"Failed to fetch from {source_name}: {e}")
 
-    random.shuffle(all_posts)
-    
-    seen_urls = set()
-    unique_posts = []
-    for post in all_posts:
-        file_url = post.get('file_url')
-        if file_url and file_url not in seen_urls:
-            unique_posts.append(post)
-            seen_urls.add(file_url)
-        elif not file_url: 
-            unique_posts.append(post)
+    unique_posts = _dedupe_posts(all_posts)
 
+    # Fill the page when some sources came back short or empty (e.g. missing API keys).
+    if len(unique_posts) < limit and working_sources:
+        max_extra_pages = 3
+        refill_page = page + 1
+        for _ in range(max_extra_pages):
+            if len(unique_posts) >= limit:
+                break
+            count_still_needed = limit - len(unique_posts)
+            topped = False
+            for source_name in working_sources:
+                if len(unique_posts) >= limit:
+                    break
+                try:
+                    posts, _ = _do_fetch_single_source(source_name, tags, count_still_needed, refill_page, custom_boorus)
+                    if posts:
+                        topped = True
+                        all_posts.extend(posts)
+                        unique_posts = _dedupe_posts(all_posts)
+                except Exception as e:
+                    print(f"Failed to refill from {source_name}: {e}")
+            if not topped:
+                break
+            refill_page += 1
+
+    random.shuffle(unique_posts)
+    
     return unique_posts, total_count
 
 def _do_fetch_single_source(source_name, tags, limit, page, custom_boorus):
