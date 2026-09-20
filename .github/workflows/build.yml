@@ -7,9 +7,8 @@ on:
   workflow_dispatch:
     inputs:
       base_version:
-        description: "Base version for the dev tag (e.g. v6.0.3 -> v6.0.3-dev.1 yadda yadda)"
+        description: "Optional base version for the dev tag (e.g. v6.0.3); defaults to the version parsed from USER_AGENT."
         required: false
-        default: "v6.0.3"
 
 permissions:
   contents: write
@@ -57,7 +56,15 @@ jobs:
         id: version
         shell: bash
         run: |
-          BASE="${{ inputs.base_version || 'v6.0.3' }}"
+          BASE="${{ inputs.base_version }}"
+          if [ -z "$BASE" ]; then
+            VER=$(grep -m1 '^USER_AGENT' snekbooru/common/constants.py | sed -E 's/.*Snekbooru\/([0-9]+(\.[0-9]+)*).*/\1/')
+            if [ -z "$VER" ]; then
+              echo "Could not parse version from USER_AGENT" >&2
+              exit 1
+            fi
+            BASE="v${VER}"
+          fi
           MAX=0
           for tag in $(git tag -l "${BASE}-dev.*" | sed -E 's/.*-dev\.([0-9]+)$/\1/'); do
             if [ "$tag" -gt "$MAX" ]; then MAX="$tag"; fi
