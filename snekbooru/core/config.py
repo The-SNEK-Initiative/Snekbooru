@@ -283,13 +283,12 @@ def _reinject_credentials(value):
 
 def _dpapi_protect(raw):
     import win32crypt
-    blob, _ = win32crypt.CryptProtectData(
+    return win32crypt.CryptProtectData(
         raw, "Snekbooru state", None, None, None, 0)
-    return blob
 
 def _dpapi_unprotect(blob):
     import win32crypt
-    data, _ = win32crypt.CryptUnprotectData(blob, None, None, None, 0)
+    _, data = win32crypt.CryptUnprotectData(blob, None, None, None, 0)
     return data
 
 def _aesgcm_key():

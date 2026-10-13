@@ -37,5 +37,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['graphics/new_logo.png'],
+    icon=['git_graphics/S.png'],
+    version='scripts/windows_version_info.txt',
 )

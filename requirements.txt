@@ -7,6 +7,7 @@ python-vlc
 Markdown
 enma; python_version < "3.14"
 cryptography
+pywin32; sys_platform == "win32"
 aiohttp
 aiocache
 google-generativeai
