@@ -15,7 +15,6 @@
 **/.*/
 cloc-1.64.exe
 currentchangesforfutureme.txt
-# SNEK layering: these trees live in their OWN repos — never stage/commit here.
 snekbooru_core/
 snekbooru_linux/
 snek_apollo_python_sdk/
