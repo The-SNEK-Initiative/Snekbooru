@@ -9,6 +9,7 @@ from cryptography.fernet import Fernet
 from PyQt5.QtCore import QStandardPaths
 
 from snekbooru.common.constants import DEFAULT_AI_MODEL, DEFAULT_HOTKEYS
+from snekbooru.common.ai_defaults import DEFAULT_AI_PERSONAS, upgrade_default_ai_presets
 
 
 SETTINGS = {}
@@ -484,10 +485,13 @@ def load_settings():
         "ai_api_key": "",
         "ai_endpoint": "https://openrouter.ai/api/v1/chat/completions",
         "ai_provider": "OpenRouter",
+        "ai_tools_enabled": True,
+        "ai_web_enabled": True,
+        "ollama_endpoint": "http://localhost:11434",
         "gemini_api_key": "",
         "ai_presets": [{
             "name": "SnekAI",
-            "persona": "You are SnekAI, a friendly and slightly mischievous snake-themed AI assistant for the Snekbooru application. You are knowledgeable about anime, art, and imageboards. You are helpful and engaging. You can roleplay, but you must adhere to safety guidelines, avoiding the promotion of illegal acts or dangerous content. Erotic roleplay is permissible within these boundaries.",
+            "persona": DEFAULT_AI_PERSONAS["OpenRouter"],
             "model": DEFAULT_AI_MODEL,
             "provider": "OpenRouter",
             "allow_spicy": True,
@@ -497,7 +501,7 @@ def load_settings():
             "creativity": 80,
         }, {
             "name": "Snekai (Gemini)",
-            "persona": "You are Snekai, a friendly snake-themed AI assistant powered by Google's Gemini. You are knowledgeable about anime, art, and imageboards. You are helpful, engaging, and witty. You provide thoughtful responses while maintaining a playful personality.",
+            "persona": DEFAULT_AI_PERSONAS["Google Gemini"],
             "model": "gemini-2.5-flash",
             "provider": "Google Gemini",
             "allow_spicy": True,
@@ -507,8 +511,8 @@ def load_settings():
             "creativity": 75,
         }, {
             "name": "Ollama (Local)",
-            "persona": "You are a helpful AI assistant running locally via Ollama. You are knowledgeable and engaging.",
-            "model": "llama3.2",
+            "persona": DEFAULT_AI_PERSONAS["Ollama (Local)"],
+            "model": "",
             "provider": "Ollama (Local)",
             "allow_spicy": True,
             "formal_casual": 50,
@@ -569,6 +573,7 @@ def load_settings():
             loaded_settings["ai_active_chat_index"] = 0
         del loaded_settings["ai_chat_history"] 
 
+    upgrade_default_ai_presets(loaded_settings.get("ai_presets", []))
     return loaded_settings
 
 def save_settings(data):

@@ -1,12 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+
 a = Analysis(
     ['snekbooru\\main.py'],
     pathex=[],
     binaries=[],
-    datas=[('graphics', 'graphics'), ('snekbooru\\lngpcks', 'snekbooru\\lngpcks'), ('snekbooru\\vendor', 'snekbooru\\vendor')],
-    hiddenimports=[],
+    datas=[('graphics', 'graphics'), ('snekbooru\\lngpcks', 'snekbooru\\lngpcks'), ('snekbooru\\vendor', 'snekbooru\\vendor')] + collect_data_files('tzdata') + collect_data_files('ddgs'),
+    hiddenimports=collect_submodules("ddgs"),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -35,5 +37,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['git_graphics/S.png'],
+    icon=['graphics/new_logo.png'],
 )

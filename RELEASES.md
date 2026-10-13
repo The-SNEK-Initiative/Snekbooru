@@ -1,5 +1,12 @@
 ## Changelog
 ### Release Version 6.0.2
+- Final full release of the current Windows desktop app; future updates are limited to security fixes and end-of-life support.
+- New logo artwork by [dyellogin](https://vgen.co/dyellogin)!!
+- Completed the Hentai tab visually.
+- Improved the AI tooling and support a lot, along with this: preset selection, chat switching, streaming cancellation, retries, persistent search previews, message copying, and conversation export.
+- Fixed AI context handling, provider errors, resource lookup, and video player callbacks.
+- A metric ton of compatability, performance, and security improvements.
+### Release Version 6.0.1 Patch
 - Fixed an issue making ImageViewer crash on start
 - Moved Snekbooru fully to python 3.14 from python 3.11
 - Fixed a few more security issues

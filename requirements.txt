@@ -11,3 +11,7 @@ aiohttp
 aiocache
 google-generativeai
 Pillow
+
+beautifulsoup4
+ddgs>=9.16,<10
+tzdata

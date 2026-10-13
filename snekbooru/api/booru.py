@@ -1,9 +1,9 @@
+from snekbooru.common.constants import APP_VERSION
 import random
 import re
 import json
 import urllib.parse
 import xml.etree.ElementTree as ET
-import time
 import time
 _zerochan_last_request_time = 0
 
@@ -954,9 +954,9 @@ def e621_posts_generic(source_name, posts_url, tags, limit, page):
     if login and api_key:
         auth_tuple = (login, api_key)
 
-    ua = "Snekbooru/6.0.1 (by anonymous on e621)"
+    ua = f"Snekbooru/{APP_VERSION} (by anonymous on e621)"
     if login:
-        ua = f"Snekbooru/6.0.1 (by {login} on e621)"
+        ua = f"Snekbooru/{APP_VERSION} (by {login} on e621)"
     custom_headers = {"User-Agent": ua}
 
     # E621/E926 uses 1-indexed page
@@ -1059,9 +1059,9 @@ def e621_tags_like_generic(source_name, tags_url, pattern, limit=20):
     if login and api_key:
         auth_tuple = (login, api_key)
 
-    ua = "Snekbooru/6.0.1 (by anonymous on e621)"
+    ua = f"Snekbooru/{APP_VERSION} (by anonymous on e621)"
     if login:
-        ua = f"Snekbooru/6.0.1 (by {login} on e621)"
+        ua = f"Snekbooru/{APP_VERSION} (by {login} on e621)"
     custom_headers = {"User-Agent": ua}
 
     params = {"search[name_matches]": pattern + "*", "limit": limit}

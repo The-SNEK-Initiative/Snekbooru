@@ -1,13 +1,21 @@
 # The SNEK Inititatives Snekbooru repository .gitignore file.
+*
+!*/
+!*.*
 
-/tests/*
-/venv/*
-*/__pycache__/*
-/snek_apollo_python_sdk/*
-/snekbooru/scratch/*
-/build/*
-/dist/*
+**/tests/
+**/venv/
+**/__pycache__/
+**/snek_apollo_python_sdk/
+**/scratch/
+**/build/
+**/dist/
 
 *.pyc
+**/.*/
 cloc-1.64.exe
 currentchangesforfutureme.txt
+# SNEK layering: these trees live in their OWN repos — never stage/commit here.
+snekbooru_core/
+snekbooru_linux/
+snek_apollo_python_sdk/

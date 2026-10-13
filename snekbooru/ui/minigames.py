@@ -1,4 +1,3 @@
-
 import random
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QPoint, QRectF, QPropertyAnimation, pyqtProperty, QPointF, QParallelAnimationGroup
 from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
@@ -630,4 +629,4 @@ class TagGuesserGame(BaseMinigame):
         QTimer.singleShot(2500, self.start_round)
 
     def update_score_label(self):
-        self.score_label.setText(_tr("Score: {score} | Highscore: {hs}").format(score=self.score, hs=self.get_highscore(self.game_name)))
+        self.score_label.setText(_tr("Score: {score} | Highscore: {hs}").format(score=self.score, hs=self.get_highscore(self.game_name)))

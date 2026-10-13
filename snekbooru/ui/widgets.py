@@ -2,13 +2,35 @@
 import re
 from typing import Optional
 from PyQt5.QtWebEngineWidgets import QWebEnginePage, QWebEngineSettings
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtCore import Qt, pyqtSignal, QSize
+from PyQt5.QtGui import QPixmap, QPainter
 from PyQt5.QtWebEngineCore import QWebEngineUrlRequestInterceptor
 from PyQt5.QtWidgets import (QApplication, QHBoxLayout, QLabel, QVBoxLayout,
-                             QWidget)
+                             QWidget, QSizePolicy)
 
 from snekbooru.core.config import SETTINGS, find_post_in_favorites
+
+
+class LogoWidget(QWidget):
+    def __init__(self, path, parent=None):
+        super().__init__(parent)
+        self.pixmap = QPixmap(path)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumSize(280, 180)
+        self.setAccessibleName("Snekbooru logo, artwork by dyellogin")
+        self._scaled = QPixmap()
+
+    def sizeHint(self):
+        return QSize(760, 500)
+
+    def paintEvent(self, event):
+        if self.pixmap.isNull():
+            return
+        target = self.pixmap.size().scaled(self.size(), Qt.KeepAspectRatio)
+        if self._scaled.size() != target:
+            self._scaled = self.pixmap.scaled(target, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        painter = QPainter(self)
+        painter.drawPixmap((self.width() - target.width()) // 2, (self.height() - target.height()) // 2, self._scaled)
 
 
 class HentaiWebPage(QWebEnginePage):

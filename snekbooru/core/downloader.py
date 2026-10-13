@@ -1,5 +1,6 @@
 import os
 import requests
+import threading
 
 from snekbooru.common.helpers import convert_gif_to_webp, get_file_hash, get_media_headers
 from snekbooru.common.translations import _tr
@@ -7,7 +8,15 @@ from snekbooru.core.config import (SETTINGS, load_downloads_data,
                                    save_downloads_data)
 
 
+_download_lock = threading.RLock()
+
+
 def download_media(post, parent_widget=None):
+    with _download_lock:
+        return _download_media(post, parent_widget)
+
+
+def _download_media(post, parent_widget=None):
     url = post.get("file_url")
     if not url:
         return False, _tr("No file URL available.")
@@ -19,7 +28,8 @@ def download_media(post, parent_widget=None):
         ext_part = os.path.splitext(url.split('?')[0])[1].lower()
         original_ext = "".join(c for c in ext_part if c.isalnum() or c == '.')
         if not original_ext:
-            original_ext = f'.{post.get("file_ext", "jpg")}'
+            extension = "".join(c for c in str(post.get("file_ext") or "jpg") if c.isalnum())[:10] or "jpg"
+            original_ext = f".{extension}"
         
         downloads_data = load_downloads_data()
         if file_hash in downloads_data and os.path.exists(downloads_data[file_hash].get("local_path", "")):

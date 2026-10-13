@@ -1715,7 +1715,7 @@ class SettingsDialog(BaseDialog):
         ai_api_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         
         self.ai_provider_combo = QComboBox()
-        self.ai_provider_combo.addItems(["OpenRouter", "Google Gemini (Experimental)"])
+        self.ai_provider_combo.addItems(["OpenRouter", "Google Gemini", "Ollama (Local)"])
         self.ai_provider_combo.setCurrentText(SETTINGS.get("ai_provider", "OpenRouter"))
         ai_api_form.addRow(_tr("AI Provider:"), self.ai_provider_combo)
         
@@ -1727,6 +1727,9 @@ class SettingsDialog(BaseDialog):
         self.gemini_api_key = QLineEdit(SETTINGS.get("gemini_api_key", "")); self.gemini_api_key.setEchoMode(QLineEdit.Password)
         self.gemini_api_key.setToolTip(_tr("Get your API key from https://ai.google.dev/"))
         ai_api_form.addRow(_tr("Gemini API Key:"), self.gemini_api_key)
+        self.ollama_endpoint = QLineEdit(SETTINGS.get("ollama_endpoint") or "http://localhost:11434")
+        self.ollama_endpoint.setToolTip(_tr("Ollama server URL. Select an installed model in AI > Personalization."))
+        ai_api_form.addRow(_tr("Ollama Server:"), self.ollama_endpoint)
         
         ai_api_group.setLayout(ai_api_form)
         api_layout.addWidget(ai_api_group)
@@ -2276,6 +2279,7 @@ You can combine type, ID, and class selectors for very specific targeting: `sGro
             "ai_api_key": self.ai_api_key.text().strip(),
             "ai_endpoint": self.ai_endpoint.text().strip(),
             "gemini_api_key": self.gemini_api_key.text().strip(),
+            "ollama_endpoint": self.ollama_endpoint.text().strip() or "http://localhost:11434",
             "hotkeys": {action: edit.keySequence().toString(QKeySequence.PortableText) for action, edit in self.hotkey_edits.items()},
             "window_mode": self.window_mode_combo.currentText(),
             "window_size_preset": self.window_size_combo.currentText(),

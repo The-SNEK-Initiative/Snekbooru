@@ -28,7 +28,8 @@ SZURUBOORU_TAGS  = "https://szuru.libre.moe/api/tags"
 HYBOORU_POSTS = "https://booru.funmaker.moe/api/post"
 HYBOORU_TAGS  = "https://booru.funmaker.moe/api/tags"
 
-USER_AGENT = "Snekbooru/6.0.2 Windows Dev Release (https://www.snekbooru.org)"
+APP_VERSION = "6.0.2"
+USER_AGENT = "Snekbooru/6.0.2 Windows Release (https://www.snekbooru.org)"
 EHENTAI_API = "https://api.e-hentai.org/api.php"
 DEFAULT_AI_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
 

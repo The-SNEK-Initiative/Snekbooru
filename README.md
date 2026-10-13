@@ -1,14 +1,12 @@
 <p align="center">
-  <img src="graphics/logo.png" alt="Snekbooru Logo" width="512">
+  <img src="graphics/new_logo_grass.png" alt="Snekbooru Logo" width="512">
 </p>
 
 # IMPORTANT NOTICE
 ### This README is still maintained, however it is recommended
 that you go to https://snekbooru.org/ for more information regarding this project. (Usually a few hours/days behind on updates however)
 
-# We are extremely sorry for the time it is taking to release complete versions, so have added a workflow to build unstable releases, with dev per versions tag, these will not be packaged by any installer however, and will be most likely riddled with bugs, as the tag suggests, for developers and testers.
-
-Please note that these version may be unstable, and are not packaged by a installer, so use them at your own risk.
+Snekbooru 6.0.2 is the final full release of the current Windows desktop app. Future updates to this version are limited to security fixes and end-of-life support. Do not worry however!! We are working on a complete rewrite of the application, which we will release as Snekbooru Nova in the comming months!
 
 # Snekbooru
 ### Finally common sourced!
@@ -19,6 +17,8 @@ Please note that these version may be unstable, and are not packaged by a instal
   - **NOTE: IF YOU POSSES A VERSION FROM PRE 6.0.0 IF YOU INSTALL THE NEWEST VERSION YOU WILL HAVE TO MANUALLY REMOVE THE OLD INSTALLATION IN C:\Program Files (x86)\Snekbooru, SINCE THE NEW INSTALLER INSTALLS TO C:\Program Files\Snekbooru AND YOU WILL END UP WITH TWO INSTALLATIONS IF YOU DON'T, SORRY FOR THE INCONVENIENCE (ALTERNATIVELY YOU CAN CHANGE THE INSTALLATION PATH WITHIN THE INSTALLER ITSELF TO THE CORRECT LOCATION)**
 
 ## Showcase
+
+Screenshots from Snekbooru 6.0.2 Release using example data. Media previews are censored and local file paths are redacted.
 
 <p align="center">
   <img src="git_graphics/homepage.png" alt="Home Page" width="800">
@@ -195,6 +195,7 @@ For bug reports, feature requests, and community discussion, please join our Dis
 ## Credits
 
 - Creator & Developer: atroubledsnake
+- Logo art: dyellogin
 - Developers: meowaste and rxnd0m_dev (Thank them for the CS version!)
 - Testers & Idea Contributors: 69st, _shidouuu and nikolailol
 

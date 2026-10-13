@@ -2,10 +2,11 @@ import os
 import sys
 from multiprocessing import freeze_support
 
-from PyQt5.QtCore import QCoreApplication, qInstallMessageHandler
+from PyQt5.QtCore import QCoreApplication, QEvent, qInstallMessageHandler
 from PyQt5.QtWidgets import QApplication
 
 from snekbooru.common.helpers import get_resource_path
+from snekbooru.common.constants import APP_VERSION
 from snekbooru.common.translations import load_translations
 from snekbooru.core.config import (load_custom_boorus, load_favorites,
                                    load_settings,
@@ -31,6 +32,7 @@ def main():
     app = QApplication(sys.argv)
     QCoreApplication.setOrganizationName("Snekbooru")
     QCoreApplication.setApplicationName("Snekbooru")
+    QCoreApplication.setApplicationVersion(APP_VERSION)
 
     SETTINGS.update(load_settings())
     load_translations()
@@ -42,11 +44,15 @@ def main():
             SETTINGS.update(first_run.values())
             SETTINGS["is_configured"] = True
             save_settings(SETTINGS)
+        else:
+            return
 
     main_window = GelDanApp()
     main_window.show()
     
     exit_code = app.exec_()
+    main_window.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
     
     from snekbooru.core.temp_cache import purge_snekbooru_temp
     print("[main] Cleaning up temp directory...")

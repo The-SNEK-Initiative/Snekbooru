@@ -31,6 +31,7 @@ class ApolloVideoPlayer(QWidget):
     state_changed = pyqtSignal(str) 
     error = pyqtSignal(str)
     download_progress = pyqtSignal(float)
+    open_finished = pyqtSignal(object, str)
     DEBUG_LOGS = False
     
     def __init__(self, parent=None, enable_smears=False):
@@ -78,6 +79,7 @@ class ApolloVideoPlayer(QWidget):
 
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self._poll_player)
+        self.open_finished.connect(self._finish_open)
         
     @property
     def is_playing(self):
@@ -234,13 +236,20 @@ class ApolloVideoPlayer(QWidget):
             return
         try:
             info = self.player.open(self.media_url, self.hwnd or 0)
-            self.duration_ms = info.get('duration_ms', 0)
-            self.video_width = info.get('width', 0)
-            self.video_height = info.get('height', 0)
-            
-            QTimer.singleShot(0, self._on_opened)
+            self.open_finished.emit(info, "")
         except Exception as e:
-            QTimer.singleShot(0, lambda: self._handle_open_error(str(e)))
+            self.open_finished.emit(None, str(e))
+
+    def _finish_open(self, info, error):
+        if not self._session_active:
+            return
+        if error:
+            self._handle_open_error(error)
+            return
+        self.duration_ms = info.get('duration_ms', 0)
+        self.video_width = info.get('width', 0)
+        self.video_height = info.get('height', 0)
+        self._on_opened()
 
     def _handle_open_error(self, error_msg):
         self._change_state(PlayerState.ERROR)
