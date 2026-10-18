@@ -1,4 +1,6 @@
 ## Changelog
+### Release Version 6.0.2 Patch
+- Fixed custom source related issues involving Danbooru like API
 ### Release Version 6.0.2
 - Final full release of the current Windows desktop app; future updates are limited to security fixes and end-of-life support.
 - New logo artwork by [dyellogin](https://vgen.co/dyellogin)!!
