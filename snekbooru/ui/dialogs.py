@@ -1364,6 +1364,10 @@ class BooruEditorDialog(BaseDialog):
                 "auth_type": self.adv_auth_type.currentText(),
                 "mode": "advanced"
             }
+            from urllib.parse import urlparse
+            parsed = urlparse(posts_url)
+            if parsed.scheme and parsed.netloc:
+                config["base_url"] = f"{parsed.scheme}://{parsed.netloc}"
             auth = self.adv_auth_type.currentText()
             if auth != "None":
                 config["username"] = self.adv_username.text().strip()

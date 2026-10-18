@@ -693,6 +693,50 @@ def _do_fetch_single_source(source_name, tags, limit, page, custom_boorus):
         else:
             raise ValueError(f"Unknown source specified: {source_name}")
 
+def _apply_custom_source_auth(config, url):
+    auth = None
+    if config.get("username") and config.get("api_key"):
+        username = config.get("username", "").strip()
+        api_key = config.get("api_key", "").strip()
+        enc_user = urllib.parse.quote(username, safe='')
+        enc_key = urllib.parse.quote(api_key, safe='')
+        url = url.replace('{login}', enc_user).replace('{id}', enc_user).replace('{api_key}', enc_key).replace('{username}', enc_user)
+        if "Danbooru" in config.get("response_format", ""):
+            auth = (username, api_key)
+    elif config.get('auth_type') == "Login & API Key":
+        auth = danbooru_auth()
+    return url, auth
+
+
+def _parse_custom_source_json(r, auth=None):
+    from snekbooru.common.constants import USER_AGENT
+    if not r.content:
+        return []
+    try:
+        return r.json()
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    import cloudscraper
+    try:
+        scraper = cloudscraper.create_scraper(
+            browser={"browser": "chrome", "platform": "windows", "mobile": False}
+        )
+        r2 = scraper.get(r.url, headers={"User-Agent": USER_AGENT}, timeout=60, auth=auth)
+        r2.raise_for_status()
+        if r2.content:
+            return r2.json()
+    except Exception:
+        pass
+
+    snippet = (r.text or "").strip()[:200]
+    raise ValueError(
+        f"The server returned a non-JSON response (HTTP {r.status_code}). "
+        f"It may be serving a login or anti-bot page instead of the API. "
+        f"Response started with: {snippet!r}"
+    )
+
+
 def fetch_custom_booru_posts(config, tags, limit, page):
     from snekbooru.common.constants import USER_AGENT
     
@@ -703,13 +747,7 @@ def fetch_custom_booru_posts(config, tags, limit, page):
             tags += " order:rank"
 
     posts_url = config['posts_url']
-    auth = None
-    if config.get("username") and config.get("api_key"):
-        username = config.get("username", "").strip()
-        api_key = config.get("api_key", "").strip()
-        posts_url = posts_url.replace('{login}', username).replace('{id}', username).replace('{api_key}', api_key).replace('{username}', username)
-    elif config.get('auth_type') == "Login & API Key":
-        auth = danbooru_auth()
+    posts_url, auth = _apply_custom_source_auth(config, posts_url)
 
     encoded_tags = urllib.parse.quote_plus(tags)
     posts_url = posts_url.replace('{tags}', encoded_tags).replace('{limit}', str(limit)).replace('{pid}', str(page)).replace('{page}', str(page + 1)).replace('{offset}', str(page * limit))
@@ -721,14 +759,24 @@ def fetch_custom_booru_posts(config, tags, limit, page):
 
     response_format = config['response_format']
     if "XML" in response_format:
-        root = ET.fromstring(r.content)
+        if not r.content:
+            return [], 0
+        try:
+            root = ET.fromstring(r.content)
+        except ET.ParseError:
+            snippet = (r.text or "").strip()[:200]
+            raise ValueError(
+                f"The server returned a non-XML response (HTTP {r.status_code}). "
+                f"It may be serving a login or anti-bot page instead of the API. "
+                f"Response started with: {snippet!r}"
+            )
         posts_xml = root.findall('post')
         posts = []
         for p_xml in posts_xml:
             posts.append(p_xml.attrib)
         total_count = int(root.attrib.get('count', 0))
     else: 
-        posts = r.json()
+        posts = _parse_custom_source_json(r, auth)
         total_count = 0
 
     norm = []
@@ -844,15 +892,9 @@ def suggest_custom_booru_tags(config, pattern, limit):
     if not config.get("tags_url"): return [], None
 
     tags_url = config['tags_url']
-    auth = None
-    if config.get("username") and config.get("api_key"):
-        username = config.get("username", "").strip()
-        api_key = config.get("api_key", "").strip()
-        tags_url = tags_url.replace('{login}', username).replace('{id}', username).replace('{api_key}', api_key).replace('{username}', username)
-    elif config['auth_type'] == "Login & API Key":
-        auth = danbooru_auth()
-    
-    tags_url = tags_url.replace('{pattern}', pattern).replace('{limit}', str(limit))
+    tags_url, auth = _apply_custom_source_auth(config, tags_url)
+
+    tags_url = tags_url.replace('{pattern}', urllib.parse.quote(pattern, safe='')).replace('{limit}', str(limit))
 
     data = http_get(tags_url, auth=auth)
     
