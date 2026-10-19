@@ -83,7 +83,8 @@ from snekbooru.api.utils import scrape_post_count, rule34_post_count
 from snekbooru.common.constants import USER_AGENT, APP_VERSION, DEFAULT_AI_MODEL
 from snekbooru.common.ai_defaults import DEFAULT_AI_PERSONAS, LEGACY_AI_PERSONAS
 from snekbooru.api.ollama import installed_ollama_models
-from snekbooru.common.helpers import (generate_thumbnail_pixmap, get_file_hash,
+from snekbooru.common.helpers import (fetch_media, generate_thumbnail_pixmap,
+                                      get_file_hash, get_media_cookies,
                                       get_media_headers, get_resource_path)
 from snekbooru.common.translations import _tr
 from snekbooru.core.ai_tools import safe_post_metadata, render_ai_markdown
@@ -943,7 +944,7 @@ class MediaViewerDialog(BaseDialog):
                 if local_path and os.path.exists(local_path):
                     with open(local_path, "rb") as f:
                         return f.read(), None
-            r = requests.get(url, headers=get_media_headers(url), timeout=30)
+            r = fetch_media(url)
             r.raise_for_status()
             return r.content, None
         except Exception as e:
@@ -979,6 +980,7 @@ class MediaViewerDialog(BaseDialog):
                     url, 
                     timeout=300, 
                     headers=get_media_headers(url), 
+                    cookies=get_media_cookies(url),
                     stream=True
                 )
                 if response.status_code == 200:

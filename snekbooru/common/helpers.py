@@ -15,6 +15,30 @@ def get_media_headers(url):
     return headers
 
 
+def fetch_media(url, timeout=30):
+    import requests
+    from snekbooru.api.utils import verification_get
+    headers = get_media_headers(url)
+    r = verification_get(url, headers=headers, timeout=timeout)
+    if r is None:
+        r = requests.get(url, headers=headers, timeout=timeout)
+    r.raise_for_status()
+    return r
+
+
+def get_media_cookies(url):
+    import time
+    from urllib.parse import urlparse
+    from snekbooru.api import utils
+    try:
+        entry = utils._verification_cache.get(urlparse(url).netloc)
+    except Exception:
+        return None
+    if entry and entry.get("expires", 0) > time.time():
+        return entry.get("cookies")
+    return None
+
+
 def get_resource_path(relative_path):
     if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
         base_path = sys._MEIPASS

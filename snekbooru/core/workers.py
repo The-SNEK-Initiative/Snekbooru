@@ -318,13 +318,12 @@ class ImageWorker(QRunnable):
             except RuntimeError:
                 return
 
-        from snekbooru.common.helpers import get_media_headers, load_pixmap_from_data
+        from snekbooru.common.helpers import fetch_media, load_pixmap_from_data
         attempts = 0
         while attempts < 2:
             attempts += 1
             try:
-                r = requests.get(self.url, headers=get_media_headers(self.url), timeout=30)
-                r.raise_for_status()
+                r = fetch_media(self.url)
                 pix = load_pixmap_from_data(r.content)
                 _safe_emit(pix)
                 return
@@ -374,9 +373,8 @@ class DataFetcher(QThread):
 
     def run(self):
         try:
-            from snekbooru.common.helpers import get_media_headers
-            r = requests.get(self.url, headers=get_media_headers(self.url), timeout=30)
-            r.raise_for_status()
+            from snekbooru.common.helpers import fetch_media
+            r = fetch_media(self.url)
             self.finished.emit(r.content, self.post, "")
         except Exception as e:
             self.finished.emit(b"", self.post, str(e))

@@ -7,6 +7,24 @@ import xml.etree.ElementTree as ET
 import time
 _zerochan_last_request_time = 0
 
+_DANBOORU_ONLY_FIELDS = ("id,file_url,large_file_url,preview_file_url,file_ext,"
+                         "image_width,image_height,tag_string,rating,score")
+
+
+def _custom_posts_missing_file_urls(posts):
+    if isinstance(posts, dict):
+        posts = posts.get("posts", posts.get("post", []))
+    if not isinstance(posts, list) or not posts:
+        return False
+    for p in posts:
+        if not isinstance(p, dict):
+            continue
+        if p.get("file_url") or p.get("large_file_url") or p.get("preview_file_url"):
+            return False
+        if isinstance(p.get("file"), dict) and p["file"].get("url"):
+            return False
+    return True
+
 
 def filter_posts_by_blacklist(posts, blacklisted_tags):
     if not blacklisted_tags:
@@ -790,6 +808,17 @@ def fetch_custom_booru_posts(config, tags, limit, page):
     else: 
         posts = _parse_custom_source_json(r, auth)
         total_count = 0
+        if "Danbooru" in response_format and "only=" not in posts_url and _custom_posts_missing_file_urls(posts):
+            sep = "&" if "?" in posts_url else "?"
+            alt_url = f"{posts_url}{sep}only={_DANBOORU_ONLY_FIELDS}"
+            try:
+                r_alt = verification_get(alt_url, headers=headers, timeout=30, auth=auth)
+                if r_alt is not None:
+                    alt_posts = _parse_custom_source_json(r_alt, auth)
+                    if not _custom_posts_missing_file_urls(alt_posts):
+                        posts = alt_posts
+            except (ValueError, json.JSONDecodeError):
+                pass
 
     norm = []
     if response_format == "Gelbooru JSON":

@@ -2,7 +2,8 @@ import os
 import requests
 import threading
 
-from snekbooru.common.helpers import convert_gif_to_webp, get_file_hash, get_media_headers
+from snekbooru.common.helpers import (convert_gif_to_webp, get_file_hash,
+                                      get_media_cookies, get_media_headers)
 from snekbooru.common.translations import _tr
 from snekbooru.core.config import (SETTINGS, load_downloads_data,
                                    save_downloads_data)
@@ -35,7 +36,8 @@ def _download_media(post, parent_widget=None):
         if file_hash in downloads_data and os.path.exists(downloads_data[file_hash].get("local_path", "")):
             return True, _tr("File already exists.")
 
-        r = requests.get(url, headers=get_media_headers(url), timeout=60)
+        r = requests.get(url, headers=get_media_headers(url),
+                         cookies=get_media_cookies(url), timeout=60)
         r.raise_for_status()
         
         media_data = r.content
