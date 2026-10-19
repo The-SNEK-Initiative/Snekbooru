@@ -710,12 +710,21 @@ def _apply_custom_source_auth(config, url):
 
 def _parse_custom_source_json(r, auth=None):
     from snekbooru.common.constants import USER_AGENT
+    from snekbooru.api.utils import verification_get, _is_verification_page
     if not r.content:
         return []
     try:
         return r.json()
     except (json.JSONDecodeError, ValueError):
         pass
+
+    if _is_verification_page(r):
+        r2 = verification_get(r.url, headers={"User-Agent": USER_AGENT}, timeout=30, auth=auth)
+        if r2 is not None:
+            try:
+                return r2.json()
+            except (json.JSONDecodeError, ValueError):
+                pass
 
     import cloudscraper
     try:
@@ -754,7 +763,10 @@ def fetch_custom_booru_posts(config, tags, limit, page):
 
 
     headers = {"User-Agent": USER_AGENT}
-    r = requests.get(posts_url, headers=headers, timeout=30, auth=auth)
+    from snekbooru.api.utils import verification_get
+    r = verification_get(posts_url, headers=headers, timeout=30, auth=auth)
+    if r is None:
+        r = requests.get(posts_url, headers=headers, timeout=30, auth=auth)
     r.raise_for_status()
 
     response_format = config['response_format']

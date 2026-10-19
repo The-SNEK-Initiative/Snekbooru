@@ -1,6 +1,7 @@
 import re
 import os
 import time
+import hashlib
 import requests
 import cloudscraper
 
@@ -9,6 +10,105 @@ from snekbooru.common.constants import RULE34_POSTS
 
 _FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://localhost:8191")
 _cf_bypass_cache = {}
+_verification_cache = {}
+_BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+               "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+
+
+def _is_verification_page(r):
+    try:
+        if "json" in (r.headers.get("content-type") or ""):
+            return False
+        return "const challenge_id" in (r.text or "")
+    except Exception:
+        return False
+
+
+def _solve_verification_challenge(r):
+    text = r.text or ""
+
+    def grab(name):
+        m = re.search(r'const %s = "([^"]*)"' % name, text)
+        return m.group(1) if m else None
+
+    challenge_id = grab("challenge_id")
+    generated = grab("challenge_generated")
+    expires = grab("challenge_cookie_expires")
+    seed = grab("powSeed")
+    if not (challenge_id and generated and expires and seed):
+        return None
+
+    m = re.search(r'const powPrefix = "0"\.repeat\((\d+)\)', text)
+    prefix = "0" * (int(m.group(1)) if m else 5)
+    md = re.search(r"const delay = ([\d.]+);", text)
+    delay = float(md.group(1)) if md else 5.0
+
+    started = time.time()
+    nonce = 0
+    while True:
+        pow_hash = hashlib.sha1(("%s:%d" % (seed, nonce)).encode()).hexdigest()
+        if pow_hash.startswith(prefix):
+            break
+        nonce += 1
+
+    remaining = delay - (time.time() - started)
+    if remaining > 0:
+        time.sleep(remaining)
+
+    from urllib.parse import urlsplit
+    parts = urlsplit(r.url)
+    origin = "%s://%s" % (parts.scheme, parts.netloc)
+    payload = {
+        "challenge_id": challenge_id,
+        "challenge_generated": generated,
+        "challenge_cookie_expires": expires,
+        "pow_nonce": str(nonce),
+        "pow_hash": pow_hash,
+    }
+    headers = {
+        "User-Agent": _BROWSER_UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Content-Type": "application/json",
+        "X-Requested-With": "XMLHttpRequest",
+        "X-Verification-Challenge": "1",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "SAMEORIGIN",
+        "Referer": r.url,
+        "Origin": origin,
+    }
+    try:
+        pr = requests.post(origin + "/", json=payload, headers=headers, timeout=30)
+    except requests.RequestException:
+        return None
+    jar = requests.utils.dict_from_cookiejar(pr.cookies)
+    if "atf-anti-bot" not in jar:
+        return None
+    return {"cookies": jar, "expires": float(expires)}
+
+
+def verification_get(url, headers=None, auth=None, timeout=30, params=None):
+    from urllib.parse import urlparse
+    domain = urlparse(url).netloc
+    cache = _verification_cache.get(domain)
+    cookies = None
+    if cache and cache.get("expires", 0) > time.time():
+        cookies = cache.get("cookies")
+
+    try:
+        r = requests.get(url, params=params, headers=headers, cookies=cookies,
+                         timeout=timeout, auth=auth)
+    except requests.RequestException:
+        return None
+    if not _is_verification_page(r):
+        return r
+
+    solution = _solve_verification_challenge(r)
+    if solution:
+        _verification_cache[domain] = solution
+        r = requests.get(url, params=params, headers=headers,
+                         cookies=solution["cookies"], timeout=timeout, auth=auth)
+    return r
 
 def _flaresolverr_solve(url, timeout=60):
     try:
