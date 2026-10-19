@@ -1,4 +1,6 @@
 ## Changelog
+### Release Version 6.0.2 Patch 2
+- Expanding unofficial support for some booru sites
 ### Release Version 6.0.2 Patch
 - Fixed custom source related issues involving Danbooru like API
 ### Release Version 6.0.2
